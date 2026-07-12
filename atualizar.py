@@ -23,4 +23,10 @@ subprocess.run([sys.executable, "classificar_noticias.py"])
 print("Gerando briefing do dia...")
 subprocess.run([sys.executable, "briefing.py"])
 
+print("Enviando briefing por e-mail...")
+subprocess.run([sys.executable, "enviar_briefing.py"])
+
+print("Verificando alertas...")
+subprocess.run([sys.executable, "alertas.py"])
+
 print("Pronto! Todos os dados foram atualizados.")
