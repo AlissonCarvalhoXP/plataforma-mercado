@@ -6,7 +6,6 @@ from google import genai
 
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
 MODELO = "gemini-flash-latest"
 
 
@@ -28,16 +27,11 @@ Use SOMENTE os dados abaixo; nao invente numeros.
 DADOS:
 {contexto}
 """
-    for tentativa in range(3):
+    for tentativa in range(4):
         try:
             resposta = client.models.generate_content(model=MODELO, contents=prompt)
             return resposta.text.strip()
-        except Exception as e:
-            print(f"Tentativa {tentativa + 1} falhou (servidor ocupado). Esperando 5s...")
-            time.sleep(5)
-    return "Nao foi possivel gerar o briefing agora (servidor ocupado). Tente mais tarde."
-
-if __name__ == "__main__":
-    exemplo = "Ibovespa fecha em alta de quase 3%, apos IPCA; dolar recua para R$ 5,10"
-    print(f"Manchete: {exemplo}")
-    print(f"Categoria: {classificar_noticia(exemplo)}")    
+        except Exception:
+            print(f"Tentativa {tentativa + 1} falhou (servidor ocupado). Esperando 10s...")
+            time.sleep(10)
+    return None

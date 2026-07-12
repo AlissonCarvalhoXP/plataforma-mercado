@@ -16,6 +16,14 @@ try:
 except Exception:
     st.write("Rode o briefing.py para gerar o comentário do dia.")
 
+# --- DESTAQUES DO DIA (IA) ---
+try:
+    d = pd.read_sql("SELECT texto FROM destaques", engine)
+    st.markdown("**⚡ Destaques do dia**")
+    st.markdown(d["texto"].iloc[0])
+except Exception:
+    pass
+
 # --- INDICADORES MACRO ---
 ind = pd.read_sql("SELECT * FROM indicadores_bcb", engine)
 
@@ -61,7 +69,7 @@ st.bar_chart(deb["Indexador"].value_counts())
 
 st.write("**Detalhe das séries**")
 st.dataframe(deb[[
-    "Nome_Emissor", "Serie", "Indexador", "Valor_Serie", "Prazo_Anos",
+    "Nome_Emissor", "Serie", "Indexador", "Spread", "Valor_Serie", "Prazo_Anos",
     "Data_Emissao", "Data_Vencimento", "Rating", "Titulo_incentivado",
     "Nome_Lider", "Agente_fiduciario", "Data_Encerramento", "Link_SRE",
 ]])
@@ -75,3 +83,24 @@ if mercado.empty:
 else:
     for _, n in mercado.head(15).iterrows():
         st.markdown(f"`{n['categoria']}` **[{n['titulo']}]({n['link']})** — _{n['data']}_")
+
+# --- PERGUNTE A PLATAFORMA (IA) ---
+st.subheader("💬 Pergunte à plataforma")
+pergunta = st.text_input("Ex.: por que o real está forte? a Engie emitiu debêntures? qual a taxa média das emissões?")
+if pergunta:
+    from analise_ia import responder_pergunta
+    contexto = f"""Indicadores: Selic {round(ultimo_valor('Selic'), 2)}% a.a., IPCA {round(ultimo_valor('IPCA'), 2)}% (mes), IGP-M {round(ultimo_valor('IGP-M'), 2)}% (mes).
+Dolar USD/BRL atual: R$ {dolar['Close'].iloc[-1]:.2f}.
+Debentures: {len(deb)} series. Por indexador: {deb['Indexador'].value_counts().to_dict()}.
+Emissores de debentures na base: {'; '.join(deb['Nome_Emissor'].dropna().unique())}.
+"""
+    spread_medio = deb.groupby("Indexador")["Spread"].mean().round(2).to_dict()
+    contexto += f"\nSpread medio das debentures por indexador (% a.a.): {spread_medio}"
+    try:
+        contexto += "\nBriefing: " + pd.read_sql("SELECT texto FROM briefing", engine)["texto"].iloc[0]
+    except Exception:
+        pass
+    if not mercado.empty:
+        contexto += "\nManchetes: " + "; ".join(mercado["titulo"].head(10))
+    with st.spinner("Pensando..."):
+        st.write(responder_pergunta(pergunta, contexto))        
