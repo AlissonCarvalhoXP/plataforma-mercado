@@ -3,3 +3,6 @@ yfinance
 SQLAlchemy
 streamlit
 requests
+feedparser
+google-genai
+python-dotenv 

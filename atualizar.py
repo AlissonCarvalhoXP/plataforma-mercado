@@ -14,4 +14,13 @@ subprocess.run([sys.executable, "coleta_debentures.py"])
 print("Enriquecendo novas debentures...")
 subprocess.run([sys.executable, "enriquecer_debentures.py"])
 
+print("Coletando noticias...")
+subprocess.run([sys.executable, "coleta_noticias.py"])
+
+print("Classificando noticias com IA...")
+subprocess.run([sys.executable, "classificar_noticias.py"])
+
+print("Gerando briefing do dia...")
+subprocess.run([sys.executable, "briefing.py"])
+
 print("Pronto! Todos os dados foram atualizados.")
