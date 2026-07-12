@@ -5,7 +5,7 @@ from sqlalchemy import create_engine
 
 
 def buscar_serie_bcb(codigo, n=12):
-# busca as ultimas N observacoes de uma serie do BCB e devolve um DataFrame limpo
+    # busca as ultimas N observacoes de uma serie do BCB e devolve um DataFrame limpo
     url = f"https://api.bcb.gov.br/dados/serie/bcdata.sgs.{codigo}/dados/ultimos/{n}?formato=json"
     resposta = requests.get(url)
     df = pd.DataFrame(resposta.json())
@@ -16,10 +16,10 @@ def buscar_serie_bcb(codigo, n=12):
 
 # dicionario: nome do indicador -> codigo no BCB
 indicadores = {
-"Selic": 432,
-"CDI": 12,
-"IPCA": 433,
-"IGP-M": 189,
+    "Selic": 432,
+    "CDI": 12,
+    "IPCA": 433,
+    "IGP-M": 189,
 }
 
 # laco: busca cada indicador e junta numa lista
@@ -29,12 +29,22 @@ for nome, codigo in indicadores.items():
     df["indicador"] = nome
     lista.append(df)
 
-# empilha todos os DataFrames num so
 todos = pd.concat(lista, ignore_index=True)
 
-# salva no banco, na tabela "indicadores_bcb"
+# --- INCREMENTAL: guardar so o que e novo ---
 engine = create_engine("sqlite:///data/mercado.db")
-todos.to_sql("indicadores_bcb", engine, if_exists="replace", index=False)
 
-print(f"Salvos {len(todos)} registros de {len(indicadores)} indicadores!")
-print(todos["indicador"].value_counts())
+# combinacoes (indicador + data) que ja estao no banco
+existentes = pd.read_sql("SELECT indicador, data FROM indicadores_bcb", engine, parse_dates=["data"])
+
+# cria uma "chave" unica juntando indicador + data (nos dois DataFrames)
+todos["chave"] = todos["indicador"] + " " + todos["data"].astype(str)
+existentes["chave"] = existentes["indicador"] + " " + existentes["data"].astype(str)
+
+# mantem so as linhas cuja chave ainda NAO existe, e remove a coluna auxiliar
+novos = todos[~todos["chave"].isin(existentes["chave"])].drop(columns="chave")
+
+# acrescenta so os novos
+novos.to_sql("indicadores_bcb", engine, if_exists="append", index=False)
+
+print(f"{len(novos)} novos registros adicionados.")

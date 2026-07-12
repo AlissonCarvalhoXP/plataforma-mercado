@@ -1,18 +1,26 @@
 # coleta.py
 import yfinance as yf
+import pandas as pd
 from sqlalchemy import create_engine
 
 # 1) COLETA
-dados = yf.download("BRL=X", period="6mo", interval="1d")
+dolar = yf.download("BRL=X", period="6mo", interval="1d")
 
 # 2) LIMPEZA
-dados.columns = dados.columns.droplevel(1)   # remove o nivel do ticker
-dados.columns.name = None                    # remove o rotulo "Price" do canto
-dados = dados.reset_index()                  # a data vira a coluna "Date"
+dolar.columns = dolar.columns.droplevel(1)
+dolar.columns.name = None
+dolar = dolar.reset_index()
 
-# 3) ARMAZENAMENTO
+# 3) INCREMENTAL: guardar so os dias novos
 engine = create_engine("sqlite:///data/mercado.db")
-dados.to_sql("usd_brl", engine, if_exists="replace", index=False)
 
-print("Dados salvos no banco com sucesso!")
-print(f"{len(dados)} linhas gravadas na tabela 'usd_brl'.")
+# le as datas que ja estao no banco (convertendo de volta para data)
+existentes = pd.read_sql("SELECT Date FROM usd_brl", engine, parse_dates=["Date"])
+
+# mantem so as linhas cujas datas ainda NAO estao no banco
+novos = dolar[~dolar["Date"].isin(existentes["Date"])]
+
+# acrescenta so os novos
+novos.to_sql("usd_brl", engine, if_exists="append", index=False)
+
+print(f"{len(novos)} novos dias adicionados.")
