@@ -32,7 +32,22 @@ st.dataframe(dolar)
 
 # --- DEBENTURES (novas emissoes CVM) ---
 st.subheader("Debêntures — novas emissões (CVM)")
-deb = pd.read_sql("SELECT * FROM debentures_series", engine)
+
+# detalhe por serie (SRE) + dados da oferta (CSV da CVM)
+series = pd.read_sql("SELECT * FROM debentures_series", engine)
+ofertas = pd.read_sql(
+    """
+    SELECT Numero_Requerimento, Nome_Emissor, CNPJ_Emissor, Emissao,
+           Data_requerimento, Data_Encerramento, Valor_Total_Registrado,
+           Nome_Lider, Agente_fiduciario, Titulo_incentivado
+    FROM debentures
+    """,
+    engine,
+)
+deb = series.merge(ofertas, on="Numero_Requerimento", how="left")
+
+# link para a pagina da oferta na CVM
+deb["Link_SRE"] = "https://web.cvm.gov.br/sre-publico-cvm/#/oferta-publica/" + deb["Numero_Requerimento"].astype(str)
 
 d1, d2 = st.columns(2)
 d1.metric("Séries coletadas", len(deb))
@@ -42,4 +57,8 @@ st.write("**Emissões por indexador**")
 st.bar_chart(deb["Indexador"].value_counts())
 
 st.write("**Detalhe das séries**")
-st.dataframe(deb[["Serie", "Valor_Serie", "Indexador", "Prazo_Anos", "Data_Vencimento", "Rating"]])
+st.dataframe(deb[[
+    "Nome_Emissor", "Serie", "Indexador", "Valor_Serie", "Prazo_Anos",
+    "Data_Emissao", "Data_Vencimento", "Rating", "Titulo_incentivado",
+    "Nome_Lider", "Agente_fiduciario", "Data_Encerramento", "Link_SRE",
+]])
