@@ -32,7 +32,7 @@ for nome, codigo in indicadores.items():
 todos = pd.concat(lista, ignore_index=True)
 
 # --- INCREMENTAL: guardar so o que e novo ---
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 
 # combinacoes (indicador + data) que ja estao no banco
 existentes = pd.read_sql("SELECT indicador, data FROM indicadores_bcb", engine, parse_dates=["data"])

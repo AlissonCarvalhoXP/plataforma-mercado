@@ -33,29 +33,29 @@ transformando-os em **contexto e insights acionáveis** para apoio à decisão e
 - [x] Projeto publicado no GitHub
 
 ## 🔜 Fase 3 — Histórico vivo
-- [ ] Coleta incremental (acumular sem duplicar)
-- [ ] Script único de atualização (dólar + BCB)
-- [ ] Agendamento diário automático
+- [x] Coleta incremental (acumular sem duplicar)
+- [x] Script único de atualização (dólar + BCB)
+- [x] Agendamento diário automático
 
 ## 💡 Fase 2.5 — Crédito & Debêntures (CVM)
-- [ ] Coleta de emissões via CVM Dados Abertos
-- [ ] Limpeza e armazenamento
-- [ ] Filtro de debêntures indexadas a CDI+ no dashboard
-- [ ] Alerta de novas emissões
+- [x] Coleta de emissões via CVM Dados Abertos
+- [x] Limpeza e armazenamento
+- [x] Filtro de debêntures indexadas a CDI+ no dashboard
+- [x] Alerta de novas emissões
 
 ## 💡 Fase 4 — Análises automáticas
-- [ ] Detecção de eventos relevantes (variações, mudanças de taxa)
-- [ ] Geração de interpretações por regras
+- [x] Detecção de eventos relevantes (variações, mudanças de taxa)
+- [x] Geração de interpretações por regras
 
 ## 💡 Fase 5 — Notícias + IA
-- [ ] Coleta de notícias (RSS)
-- [ ] Classificação por tema (juros, câmbio, fiscal…)
-- [ ] Resumo com IA (LLM)
-- [ ] Briefing diário com fontes citadas
+- [x] Coleta de notícias (RSS)
+- [x] Classificação por tema (juros, câmbio, fiscal…)
+- [x] Resumo com IA (LLM)
+- [x] Briefing diário com fontes citadas
 
 ## 💡 Fase 6 — Alertas & Produção
-- [ ] Regras de alerta (câmbio, emissões, indicadores)
-- [ ] Notificações (e-mail / Telegram)
+- [x] Regras de alerta (câmbio, emissões, indicadores)
+- [x] Notificações (e-mail / Telegram)
 - [ ] Migração para PostgreSQL
 - [ ] Deploy do dashboard (Streamlit Community Cloud)
 

@@ -23,7 +23,7 @@ for fonte, url in feeds.items():
 df = pd.DataFrame(noticias)
 
 # --- INCREMENTAL: so as novas ---
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 try:
     existentes = pd.read_sql("SELECT link FROM noticias", engine)
     ja_temos = set(existentes["link"])

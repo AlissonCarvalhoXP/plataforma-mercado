@@ -3,7 +3,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 
 # conecta no MESMO arquivo de banco
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 
 # le TUDO da tabela usando uma consulta SQL
 dados = pd.read_sql("SELECT * FROM usd_brl", engine)

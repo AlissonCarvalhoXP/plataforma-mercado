@@ -4,7 +4,7 @@ from sqlalchemy import create_engine
 from analises import analisar_dolar, analisar_selic, analisar_debentures
 from analise_ia import gerar_briefing, gerar_destaques
 
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 
 # 1) montar o contexto (indicadores + noticias de mercado)
 contexto = "\n".join([

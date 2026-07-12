@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 st.title("Market Intelligence Hub")
 st.write("Acompanhamento de indicadores de mercado.")
 
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 
 # --- BRIEFING DO DIA (IA) ---
 st.subheader("🤖 Briefing do dia")

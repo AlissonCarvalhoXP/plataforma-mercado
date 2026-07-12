@@ -3,7 +3,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 from enviar_email import enviar_email
 
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 
 partes = ["=== BRIEFING DO DIA ===\n"]
 try:

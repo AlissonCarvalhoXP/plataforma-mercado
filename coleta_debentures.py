@@ -42,7 +42,7 @@ debentures["Valor_Total_Registrado"] = (
 debentures["Valor_Total_Registrado"] = pd.to_numeric(debentures["Valor_Total_Registrado"], errors="coerce")
 
 # 8) salvar no banco
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 debentures.to_sql("debentures", engine, if_exists="replace", index=False)
 
 print(f"{len(debentures)} debentures salvas na tabela 'debentures'.")

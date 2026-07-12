@@ -23,7 +23,7 @@ def extrair_spread(texto):
     return None
 
 
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 deb = pd.read_sql("SELECT * FROM debentures_series", engine)
 
 deb["Spread"] = deb["Remuneracao"].apply(extrair_spread)

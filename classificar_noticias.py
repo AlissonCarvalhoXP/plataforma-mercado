@@ -3,7 +3,7 @@ import pandas as pd
 from sqlalchemy import create_engine
 from analise_ia import classificar_noticia
 
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 noticias = pd.read_sql("SELECT * FROM noticias", engine)
 
 # cria a coluna 'categoria' se ainda nao existir

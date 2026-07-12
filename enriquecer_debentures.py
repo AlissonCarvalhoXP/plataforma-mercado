@@ -54,7 +54,7 @@ def buscar_detalhe_serie(numero):
     return resultado
 
 
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 
 # 1) todos os requerimentos de debentures
 todos = pd.read_sql("SELECT Numero_Requerimento FROM debentures", engine)

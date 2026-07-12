@@ -12,7 +12,7 @@ dolar.columns.name = None
 dolar = dolar.reset_index()
 
 # 3) INCREMENTAL: guardar so os dias novos
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 
 # le as datas que ja estao no banco (convertendo de volta para data)
 existentes = pd.read_sql("SELECT Date FROM usd_brl", engine, parse_dates=["Date"])
