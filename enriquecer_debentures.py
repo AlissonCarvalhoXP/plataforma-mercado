@@ -2,7 +2,7 @@
 import re
 import requests
 import pandas as pd
-from sqlalchemy import create_engine
+from db import engine
 
 
 def classificar_indexador(texto):
@@ -43,38 +43,32 @@ def buscar_detalhe_serie(numero):
             remus = [c.get("campoValor", "") for c in campos if "remunera" in c.get("campoNome", "").lower()]
             remuneracao = next((r for r in remus if r and r.strip()), "")
             resultado.append({
-                "Numero_Requerimento": numero,
-                "Serie": lote.get("valorMobiliario"),
-                "Valor_Serie": lote.get("valorTotalLote"),
-                "Data_Emissao": campo(campos, "data de emiss"),
-                "Data_Vencimento": campo(campos, "data de vencimento"),
-                "Rating": campo(campos, "avalia"),
-                "Remuneracao": remuneracao,
+                "numero_requerimento": numero,
+                "serie": lote.get("valorMobiliario"),
+                "valor_serie": lote.get("valorTotalLote"),
+                "data_emissao": campo(campos, "data de emiss"),
+                "data_vencimento": campo(campos, "data de vencimento"),
+                "rating": campo(campos, "avalia"),
+                "remuneracao": remuneracao,
             })
     return resultado
 
 
-from db import engine
+todos = pd.read_sql("SELECT numero_requerimento FROM debentures", engine)
 
-# 1) todos os requerimentos de debentures
-todos = pd.read_sql("SELECT Numero_Requerimento FROM debentures", engine)
-
-# 2) os que JA foram enriquecidos (se a tabela existir)
 try:
-    feitos_df = pd.read_sql("SELECT DISTINCT Numero_Requerimento FROM debentures_series", engine)
-    feitos = set(feitos_df["Numero_Requerimento"])
+    feitos_df = pd.read_sql("SELECT DISTINCT numero_requerimento FROM debentures_series", engine)
+    feitos = set(feitos_df["numero_requerimento"])
 except Exception:
-    feitos = set()   # 1a vez: a tabela ainda nao existe
+    feitos = set()
 
-# 3) so os NOVOS (ainda nao enriquecidos)
-novos = [n for n in todos["Numero_Requerimento"] if n not in feitos]
+novos = [n for n in todos["numero_requerimento"] if n not in feitos]
 print(f"{len(novos)} novos requerimentos para enriquecer (de {len(todos)} no total).")
 
 if not novos:
     print("Nada novo. Banco de debentures ja atualizado.")
     raise SystemExit
 
-# 4) enriquecer so os novos
 todas_series = []
 total = len(novos)
 for i, numero in enumerate(novos, start=1):
@@ -87,20 +81,18 @@ if not todas_series:
     raise SystemExit
 
 detalhes = pd.DataFrame(todas_series)
-
-# 5) limpar tipos + prazo + indexador
-detalhes["Data_Emissao"] = pd.to_datetime(detalhes["Data_Emissao"], format="%d/%m/%Y", errors="coerce")
-detalhes["Data_Vencimento"] = pd.to_datetime(detalhes["Data_Vencimento"], format="%d/%m/%Y", errors="coerce")
-detalhes["Valor_Serie"] = (
-    detalhes["Valor_Serie"].astype(str)
+detalhes["data_emissao"] = pd.to_datetime(detalhes["data_emissao"], format="%d/%m/%Y", errors="coerce")
+detalhes["data_vencimento"] = pd.to_datetime(detalhes["data_vencimento"], format="%d/%m/%Y", errors="coerce")
+detalhes["valor_serie"] = (
+    detalhes["valor_serie"].astype(str)
     .str.replace(".", "", regex=False)
     .str.replace(",", ".", regex=False)
 )
-detalhes["Valor_Serie"] = pd.to_numeric(detalhes["Valor_Serie"], errors="coerce")
-detalhes["Prazo_Anos"] = (detalhes["Data_Vencimento"] - detalhes["Data_Emissao"]).dt.days / 365.25
-detalhes["Indexador"] = detalhes["Remuneracao"].apply(classificar_indexador)
+detalhes["valor_serie"] = pd.to_numeric(detalhes["valor_serie"], errors="coerce")
+detalhes["prazo_anos"] = (detalhes["data_vencimento"] - detalhes["data_emissao"]).dt.days / 365.25
+detalhes["indexador"] = detalhes["remuneracao"].apply(classificar_indexador)
 
-# 6) ACRESCENTAR ao banco (nao substituir)
-detalhes.to_sql("debentures_series", engine, if_exists="append", index=False)
+detalhes.to_sql("debentures_series", engine, if_exists="append", index=False,
+                chunksize=500, method="multi")
 print(f"\n{len(detalhes)} novas series adicionadas.")
-print(detalhes["Indexador"].value_counts())
+print(detalhes["indexador"].value_counts())

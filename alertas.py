@@ -9,8 +9,8 @@ from db import engine
 TETO = 5.10   # alerta se passar disso
 PISO = 5.00   # alerta se cair abaixo disso
 
-dolar = pd.read_sql("SELECT Close FROM usd_brl ORDER BY Date", engine)
-atual = dolar["Close"].iloc[-1]
+dolar = pd.read_sql("SELECT close FROM usd_brl ORDER BY date", engine)
+atual = dolar["close"].iloc[-1]
 
 alertas = []
 if atual > TETO:

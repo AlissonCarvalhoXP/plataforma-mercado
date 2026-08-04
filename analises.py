@@ -1,16 +1,14 @@
 # analises.py
 import pandas as pd
-from sqlalchemy import create_engine
-
-engine = create_engine("sqlite:///data/mercado.db")
+from db import engine
 
 
 def analisar_dolar():
-    dolar = pd.read_sql("SELECT Date, Close FROM usd_brl ORDER BY Date", engine)
+    dolar = pd.read_sql("SELECT date, close FROM usd_brl ORDER BY date", engine)
     if len(dolar) < 6:
         return "Dados insuficientes para analisar o dolar."
-    atual = dolar["Close"].iloc[-1]
-    semana_atras = dolar["Close"].iloc[-6]
+    atual = dolar["close"].iloc[-1]
+    semana_atras = dolar["close"].iloc[-6]
     variacao = (atual - semana_atras) / semana_atras * 100
     if variacao > 2:
         leitura = "alta expressiva - possivel aversao a risco global e pressao sobre emergentes."
@@ -40,11 +38,11 @@ def analisar_selic():
 
 
 def analisar_debentures():
-    deb = pd.read_sql("SELECT Indexador FROM debentures_series", engine)
+    deb = pd.read_sql("SELECT indexador FROM debentures_series", engine)
     if deb.empty:
         return "Sem dados de debentures."
     total = len(deb)
-    contagem = deb["Indexador"].value_counts()
+    contagem = deb["indexador"].value_counts()
     cdi = contagem.get("CDI", 0)
     ipca = contagem.get("IPCA", 0)
     return f"{total} series de debentures na base: {cdi} em CDI e {ipca} em IPCA - CDI segue como principal indexador."

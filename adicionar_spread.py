@@ -1,7 +1,7 @@
 # adicionar_spread.py
 import re
 import pandas as pd
-from sqlalchemy import create_engine
+from db import engine
 
 
 def extrair_spread(texto):
@@ -23,12 +23,13 @@ def extrair_spread(texto):
     return None
 
 
-from db import engine
 deb = pd.read_sql("SELECT * FROM debentures_series", engine)
 
-deb["Spread"] = deb["Remuneracao"].apply(extrair_spread)
-deb.to_sql("debentures_series", engine, if_exists="replace", index=False)
+deb["spread"] = deb["remuneracao"].apply(extrair_spread)
 
-print(f"{deb['Spread'].notna().sum()} de {len(deb)} series com spread extraido.")
+deb.to_sql("debentures_series", engine, if_exists="replace", index=False,
+           chunksize=500, method="multi")
+
+print(f"{deb['spread'].notna().sum()} de {len(deb)} series com spread extraido.")
 print("\nSpread medio por indexador (%):")
-print(deb.groupby("Indexador")["Spread"].mean().round(2))
+print(deb.groupby("indexador")["spread"].mean().round(2))
