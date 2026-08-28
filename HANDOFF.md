@@ -63,9 +63,11 @@ o motor roda sozinho via agendador. Conexão centralizada em `db.py`.
   Todas com retry/try-except (resiliência a 503).
 - `analises.py` — análises por REGRAS: `analisar_dolar`, `analisar_selic`,
   `analisar_debentures`. NÃO pode ter efeito colateral (só funções + if __name__).
-- `briefing.py` — monta contexto (análises + notícias), gera briefing E destaques →
-  tabelas `briefing` e `destaques`. Só salva se a IA respondeu (não sobrescreve bom
-  com erro).
+- `carteira.py` — Portfolio Intelligence V1. Tabela `carteira` (ativo, direcao,
+  indexador, tamanho). Funções: `ler_carteira`, `salvar_carteira`, `gerar_contexto_carteira`.
+  Contexto injetado em briefing.py e app.py para personalizar análises.
+- `briefing.py` — monta contexto (análises + notícias + CARTEIRA), gera briefing E
+  destaques → tabelas `briefing` e `destaques`. Só salva se a IA respondeu.
 - `enviar_email.py` — SMTP Gmail (EMAIL_USER/EMAIL_SENHA do .env; senha de app).
 - `enviar_briefing.py` — manda briefing+destaques por e-mail.
 - `alertas.py` — alerta condicional do dólar (TETO/PISO) por e-mail.
@@ -74,14 +76,17 @@ o motor roda sozinho via agendador. Conexão centralizada em `db.py`.
 - `atualizar.bat` — wrapper p/ Agendador de Tarefas do Windows (roda diário).
 - `consultar.py` — leitura simples de teste.
 - `app.py` — dashboard Streamlit (briefing, destaques, indicadores, dólar,
-  debêntures c/ merge emissor, notícias filtradas, "Pergunte à plataforma").
-- `migrar_para_postgres.py` — copia todas as tabelas SQLite → Postgres.
-- `.env` (LOCAL, não versionado): GEMINI_API_KEY, EMAIL_USER, EMAIL_SENHA, DATABASE_URL.
-- `requirements.txt`, `.gitignore` (ignora venv/, .env, data/*.db), `README.md`, `ROADMAP.md`.
+  debêntures c/ merge emissor, notícias filtradas, CARTEIRA editável, "Pergunte à plataforma").
+- `migrar_para_postgres.py` — copia todas as tabelas SQLite → Postgres, normalizando colunas.
+- `padronizar_colunas.py` — padroniza nomes de colunas (minúsculas) em banco existente.
+- `.env.example` — template com variáveis de ambiente necessárias.
+- `DEPLOY.md` — guia passo-a-passo para deploy em Streamlit Cloud + Postgres/Neon.
+- `.github/workflows/daily-update.yml` — GitHub Actions para rodar pipeline diário.
+- `.gitignore` (ignora venv/, .env, data/*.db), `README.md`, `ROADMAP.md`, `HANDOFF.md`.
 
 ## 6. TABELAS DO BANCO
 usd_brl · indicadores_bcb · debentures · debentures_series · noticias · briefing ·
-destaques · (carteira — futura, Portfolio Intelligence).
+destaques · carteira · (Portfolio Intelligence)
 
 ## 7. FONTES DE DADOS (todas grátis, sem premium)
 - BCB SGS: `https://api.bcb.gov.br/dados/serie/bcdata.sgs.{cod}/dados/ultimos/{n}?formato=json`

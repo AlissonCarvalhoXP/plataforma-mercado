@@ -82,11 +82,42 @@ else:
     for _, n in mercado.head(15).iterrows():
         st.markdown(f"`{n['categoria']}` **[{n['titulo']}]({n['link']})** — _{n['data']}_")
 
+# --- CARTEIRA DO USUARIO (PORTFOLIO INTELLIGENCE V1) ---
+st.subheader("💼 Minha Carteira")
+try:
+    from carteira import ler_carteira, salvar_carteira, gerar_contexto_carteira
+    
+    df_carteira = ler_carteira()
+    
+    # Edição inline com st.data_editor
+    st.write("**Edite suas posicoes abaixo:**")
+    df_editado = st.data_editor(
+        df_carteira[['ativo', 'descricao', 'direcao', 'indexador', 'tamanho']],
+        use_container_width=True,
+        hide_index=True,
+        key="carteira_editor"
+    )
+    
+    # Salvar mudancas
+    if st.button("Salvar Carteira"):
+        if salvar_carteira(df_editado):
+            st.success("Carteira atualizada!")
+            st.rerun()
+    
+    # Exibir contexto formatado
+    st.markdown("**Resumo da carteira:**")
+    st.info(gerar_contexto_carteira())
+    
+except Exception as e:
+    st.warning(f"Erro ao carregar carteira: {e}")
+
 # --- PERGUNTE A PLATAFORMA (IA) ---
 st.subheader("💬 Pergunte à plataforma")
 pergunta = st.text_input("Ex.: por que o real está forte? qual a taxa média das emissões?")
 if pergunta:
     from analise_ia import responder_pergunta
+    from carteira import gerar_contexto_carteira
+    
     contexto = f"""Indicadores: Selic {round(ultimo_valor('Selic'), 2)}% a.a., IPCA {round(ultimo_valor('IPCA'), 2)}% (mes), IGP-M {round(ultimo_valor('IGP-M'), 2)}% (mes).
 Dolar USD/BRL atual: R$ {dolar['close'].iloc[-1]:.2f}.
 Debentures: {len(deb)} series. Por indexador: {deb['indexador'].value_counts().to_dict()}.
@@ -94,6 +125,13 @@ Emissores de debentures na base: {'; '.join(deb['nome_emissor'].dropna().unique(
 """
     spread_medio = deb.groupby("indexador")["spread"].mean().round(2).to_dict()
     contexto += f"\nSpread medio das debentures por indexador (% a.a.): {spread_medio}"
+    
+    # Injetar contexto da carteira
+    try:
+        contexto += "\n\n" + gerar_contexto_carteira()
+    except Exception:
+        pass
+    
     try:
         contexto += "\nBriefing: " + pd.read_sql("SELECT texto FROM briefing", engine)["texto"].iloc[0]
     except Exception:
