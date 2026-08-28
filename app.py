@@ -3,6 +3,8 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from db import engine
+from modules.opcoes.view_opcoes import render_aba_opcoes
+
 
 # Configurar tema e layout
 st.set_page_config(
@@ -340,3 +342,6 @@ Emissores de debentures na base: {'; '.join(deb['nome_emissor'].dropna().unique(
         contexto += "\nManchetes: " + "; ".join(mercado["titulo"].head(10))
     with st.spinner("Pensando..."):
         st.write(responder_pergunta(pergunta, contexto))
+        
+# --- OPÇÕES B3 ---
+render_aba_opcoes(selic=ultimo_valor("Selic") / 100)
