@@ -1,6 +1,5 @@
 # alertas.py
 import pandas as pd
-from sqlalchemy import create_engine
 from enviar_email import enviar_email
 
 from db import engine
@@ -17,6 +16,15 @@ if atual > TETO:
     alertas.append(f"Dolar ROMPEU o teto: R$ {atual:.2f} (acima de R$ {TETO:.2f})")
 elif atual < PISO:
     alertas.append(f"Dolar caiu abaixo do piso: R$ {atual:.2f} (abaixo de R$ {PISO:.2f})")
+
+# Alerta de Investidas: noticias sobre empresas de interesse
+try:
+    from investidas import gerar_alerta_investidas
+    alerta_itausa = gerar_alerta_investidas("Itausa")
+    if alerta_itausa:
+        alertas.append(f"\n{alerta_itausa}")
+except Exception:
+    pass
 
 if alertas:
     corpo = "\n".join(alertas)

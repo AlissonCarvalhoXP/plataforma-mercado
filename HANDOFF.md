@@ -66,6 +66,10 @@ o motor roda sozinho via agendador. Conexão centralizada em `db.py`.
 - `carteira.py` — Portfolio Intelligence V1. Tabela `carteira` (ativo, direcao,
   indexador, tamanho). Funções: `ler_carteira`, `salvar_carteira`, `gerar_contexto_carteira`.
   Contexto injetado em briefing.py e app.py para personalizar análises.
+- `investidas.py` — Monitora fatos relevantes de empresas (Itaúsa e similares).
+  Tabela `investidas` (cnpj, nome_empresa, fato_relevante, data_fato).
+  Funcoes: `filtrar_noticias_por_empresa`, `gerar_alerta_investidas`. Integrado no
+  app.py (aba Investidas) e alertas.py (alerta por e-mail).
 - `briefing.py` — monta contexto (análises + notícias + CARTEIRA), gera briefing E
   destaques → tabelas `briefing` e `destaques`. Só salva se a IA respondeu.
 - `enviar_email.py` — SMTP Gmail (EMAIL_USER/EMAIL_SENHA do .env; senha de app).
@@ -150,27 +154,18 @@ Python 3.14, fixar Python 3.12 nas config do app.
 - Fase 3 Coleta incremental + orquestração (atualizar.py) + agendamento (.bat).
 - Fase 4 Análises automáticas por regras (analisar_dolar/selic/debentures).
 - Fase 5 Notícias (RSS) + classificação IA + briefing + destaques + assistente Q&A.
-- Fase 6 (parcial): Alertas por e-mail ✅ ; Deploy Streamlit Cloud (snapshot) ✅ ;
-  PostgreSQL/Neon: migração feita, db.py centralizado ✅.
+- Fase 6: Alertas por e-mail ✅ ; Deploy Streamlit Cloud (snapshot + DEPLOY.md) ✅ ;
+  PostgreSQL/Neon: migração com normalização de colunas ✅ ; Workflow GitHub Actions ✅.
+- **Fase 7 [NOVO]:** Portfolio Intelligence V1 ✅ ; Módulo Investidas (Itaúsa) ✅.
 
 ### PENDENTE ⬜ (ordem sugerida)
-1. **[BLOQUEANTE] Corrigir colunas minúsculas no Postgres** (seção 8) → fecha o
-   "dado ao vivo" local + nuvem. Fazer ANTES de tudo.
-2. **Validar deploy ao vivo:** app na nuvem lendo do Postgres; provar que dado novo
-   (após atualizar.py local) aparece online sem re-commit.
-3. **Portfolio Intelligence (V1)** — próxima grande feature acordada. Tabela
-   `carteira` (ativo, direção, indexador, tamanho) editável via `st.data_editor`;
-   injetar a carteira no contexto da IA; briefing/assistente/alertas passam a
-   relacionar mercado × posições do usuário. V1 qualitativa; V2 (P&L quantitativo)
-   depende de mais dado de preço. Atende trader na PREP/CONTEXTO, não no intraday.
-4. **Módulo Investidas (Itaúsa)** — monitorar fatos relevantes de empresas por CNPJ
-   via CVM (IPE). Base robusta (CVM tem tudo material antes/junto do site). Filtro de
-   menção nas notícias + alerta.
-5. **Relatórios & Perfumaria** — export .xlsx (com "CDI + X%" e formatação BR),
+1. **Relatórios & Perfumaria** — export .xlsx (com "CDI + X%" e formatação BR),
    e-mail em HTML, tema/design do dashboard, datas dd/mm/aaaa na exibição.
-6. **Refinos de prompt** — briefing menos repetitivo (variar abertura); enxugar/
+2. **Refinos de prompt** — briefing menos repetitivo (variar abertura); enxugar/
    afinar destaques (contínuo).
-7. **(Futuro) IA-agente (caminho A)** — function calling: IA gera consultas ao banco
+3. **Coleta de Fatos Relevantes (CVM IPE)** — integrar download automático de fatos
+   relevantes de Itaúsa e empresas similares; alertar automaticamente.
+4. **(Futuro) IA-agente (caminho A)** — function calling: IA gera consultas ao banco
    sozinha. Só quando o volume de dados justificar.
 
 ### VISÃO DE LONGO PRAZO (norte, não construir agora)

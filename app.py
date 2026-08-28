@@ -82,6 +82,30 @@ else:
     for _, n in mercado.head(15).iterrows():
         st.markdown(f"`{n['categoria']}` **[{n['titulo']}]({n['link']})** — _{n['data']}_")
 
+# --- INVESTIDAS (ITAUSA E SIMILARES) ---
+st.subheader("🏢 Investidas (empresas de interesse)")
+try:
+    from investidas import filtrar_noticias_por_empresa, criar_tabela_investidas
+    
+    criar_tabela_investidas()
+    
+    # Por enquanto, monitorar Itausa (exemplo)
+    empresas_interesse = {
+        "Itausa": "17.197.092/0001-91"
+    }
+    
+    for nome_empresa, cnpj in empresas_interesse.items():
+        noticias_empresa = filtrar_noticias_por_empresa(nome_empresa)
+        if not noticias_empresa.empty:
+            with st.expander(f"📰 {nome_empresa} ({len(noticias_empresa)} noticias)"):
+                for _, n in noticias_empresa.iterrows():
+                    st.markdown(f"`{n['categoria']}` **[{n['titulo']}]({n['link']})** — _{n['data']}_")
+        else:
+            st.info(f"Sem noticias de {nome_empresa} no momento.")
+            
+except Exception as e:
+    st.warning(f"Erro ao carregar Investidas: {e}")
+
 # --- CARTEIRA DO USUARIO (PORTFOLIO INTELLIGENCE V1) ---
 st.subheader("💼 Minha Carteira")
 try:
