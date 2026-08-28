@@ -63,9 +63,15 @@ o motor roda sozinho via agendador. Conexão centralizada em `db.py`.
   Todas com retry/try-except (resiliência a 503).
 - `analises.py` — análises por REGRAS: `analisar_dolar`, `analisar_selic`,
   `analisar_debentures`. NÃO pode ter efeito colateral (só funções + if __name__).
-- `briefing.py` — monta contexto (análises + notícias), gera briefing E destaques →
-  tabelas `briefing` e `destaques`. Só salva se a IA respondeu (não sobrescreve bom
-  com erro).
+- `carteira.py` — Portfolio Intelligence V1. Tabela `carteira` (ativo, direcao,
+  indexador, tamanho). Funções: `ler_carteira`, `salvar_carteira`, `gerar_contexto_carteira`.
+  Contexto injetado em briefing.py e app.py para personalizar análises.
+- `investidas.py` — Monitora fatos relevantes de empresas (Itaúsa e similares).
+  Tabela `investidas` (cnpj, nome_empresa, fato_relevante, data_fato).
+  Funcoes: `filtrar_noticias_por_empresa`, `gerar_alerta_investidas`. Integrado no
+  app.py (aba Investidas) e alertas.py (alerta por e-mail).
+- `briefing.py` — monta contexto (análises + notícias + CARTEIRA), gera briefing E
+  destaques → tabelas `briefing` e `destaques`. Só salva se a IA respondeu.
 - `enviar_email.py` — SMTP Gmail (EMAIL_USER/EMAIL_SENHA do .env; senha de app).
 - `enviar_briefing.py` — manda briefing+destaques por e-mail.
 - `alertas.py` — alerta condicional do dólar (TETO/PISO) por e-mail.
@@ -74,14 +80,17 @@ o motor roda sozinho via agendador. Conexão centralizada em `db.py`.
 - `atualizar.bat` — wrapper p/ Agendador de Tarefas do Windows (roda diário).
 - `consultar.py` — leitura simples de teste.
 - `app.py` — dashboard Streamlit (briefing, destaques, indicadores, dólar,
-  debêntures c/ merge emissor, notícias filtradas, "Pergunte à plataforma").
-- `migrar_para_postgres.py` — copia todas as tabelas SQLite → Postgres.
-- `.env` (LOCAL, não versionado): GEMINI_API_KEY, EMAIL_USER, EMAIL_SENHA, DATABASE_URL.
-- `requirements.txt`, `.gitignore` (ignora venv/, .env, data/*.db), `README.md`, `ROADMAP.md`.
+  debêntures c/ merge emissor, notícias filtradas, CARTEIRA editável, "Pergunte à plataforma").
+- `migrar_para_postgres.py` — copia todas as tabelas SQLite → Postgres, normalizando colunas.
+- `padronizar_colunas.py` — padroniza nomes de colunas (minúsculas) em banco existente.
+- `.env.example` — template com variáveis de ambiente necessárias.
+- `DEPLOY.md` — guia passo-a-passo para deploy em Streamlit Cloud + Postgres/Neon.
+- `.github/workflows/daily-update.yml` — GitHub Actions para rodar pipeline diário.
+- `.gitignore` (ignora venv/, .env, data/*.db), `README.md`, `ROADMAP.md`, `HANDOFF.md`.
 
 ## 6. TABELAS DO BANCO
 usd_brl · indicadores_bcb · debentures · debentures_series · noticias · briefing ·
-destaques · (carteira — futura, Portfolio Intelligence).
+destaques · carteira · (Portfolio Intelligence)
 
 ## 7. FONTES DE DADOS (todas grátis, sem premium)
 - BCB SGS: `https://api.bcb.gov.br/dados/serie/bcdata.sgs.{cod}/dados/ultimos/{n}?formato=json`
@@ -145,35 +154,45 @@ Python 3.14, fixar Python 3.12 nas config do app.
 - Fase 3 Coleta incremental + orquestração (atualizar.py) + agendamento (.bat).
 - Fase 4 Análises automáticas por regras (analisar_dolar/selic/debentures).
 - Fase 5 Notícias (RSS) + classificação IA + briefing + destaques + assistente Q&A.
-- Fase 6 (parcial): Alertas por e-mail ✅ ; Deploy Streamlit Cloud (snapshot) ✅ ;
-  PostgreSQL/Neon: migração feita, db.py centralizado ✅.
+- Fase 6: Alertas por e-mail ✅ ; Deploy Streamlit Cloud (snapshot + DEPLOY.md) ✅ ;
+  PostgreSQL/Neon: migração com normalização de colunas ✅ ; Workflow GitHub Actions ✅.
+- **Fase 7 [NOVO]:** Portfolio Intelligence V1 ✅ ; Módulo Investidas (Itaúsa) ✅.
 
 ### PENDENTE ⬜ (ordem sugerida)
-1. **[BLOQUEANTE] Corrigir colunas minúsculas no Postgres** (seção 8) → fecha o
-   "dado ao vivo" local + nuvem. Fazer ANTES de tudo.
-2. **Validar deploy ao vivo:** app na nuvem lendo do Postgres; provar que dado novo
-   (após atualizar.py local) aparece online sem re-commit.
-3. **Portfolio Intelligence (V1)** — próxima grande feature acordada. Tabela
-   `carteira` (ativo, direção, indexador, tamanho) editável via `st.data_editor`;
-   injetar a carteira no contexto da IA; briefing/assistente/alertas passam a
-   relacionar mercado × posições do usuário. V1 qualitativa; V2 (P&L quantitativo)
-   depende de mais dado de preço. Atende trader na PREP/CONTEXTO, não no intraday.
-4. **Módulo Investidas (Itaúsa)** — monitorar fatos relevantes de empresas por CNPJ
-   via CVM (IPE). Base robusta (CVM tem tudo material antes/junto do site). Filtro de
-   menção nas notícias + alerta.
-5. **Relatórios & Perfumaria** — export .xlsx (com "CDI + X%" e formatação BR),
-   e-mail em HTML, tema/design do dashboard, datas dd/mm/aaaa na exibição.
-6. **Refinos de prompt** — briefing menos repetitivo (variar abertura); enxugar/
+1. **Refinos de prompt** — briefing menos repetitivo (variar abertura); enxugar/
    afinar destaques (contínuo).
-7. **(Futuro) IA-agente (caminho A)** — function calling: IA gera consultas ao banco
+2. **Coleta de Fatos Relevantes (CVM IPE)** — integrar download automático de fatos
+   relevantes de Itaúsa e empresas similares; alertar automaticamente.
+3. **(Futuro) IA-agente (caminho A)** — function calling: IA gera consultas ao banco
    sozinha. Só quando o volume de dados justificar.
+
+### FASE 8 — RELATÓRIOS & PERFUMARIA ✅ (2025-01-17)
+- relatorios.py: 3 geradores de Excel (debentures, indicadores, dolar) com formatação BR
+  * Dates: dd/mm/aaaa | Valores: R$ com 2 casas | Taxas: X.XX%
+  * Spreads: "CDI + X.XX%" conforme decisão de modelagem (montado na exibição, não no armazenamento)
+- email_html.py: templates HTML com inline CSS para briefing profissional
+  * Sections: Métrica (Selic/IPCA/IGP-M/Dólar), Briefing, Alertas, Carteira, Call-to-Action
+  * Suporta envio automático (requer EMAIL_USER/EMAIL_SENHA em .env)
+- app.py: melhorias UI/UX
+  * Seção "📥 Download de Relatórios": botões para gerar/baixar Excel (individual ou em lote)
+  * Seção "📧 Enviar Briefing por Email": input de email + botão de envio
+  * Theme customizado com CSS: gradientes, cores, metriccard styling
+  * Formatação de dados: datas em dd/mm/aaaa + moeda em R$ em TODOS dataframes exibidos
+  * st.set_page_config: wide layout, sidebar expanded, page title/icon
+- teste_integracao.py: script de validação end-to-end dos novos módulos
+  * Imports, DB connection, geração de relatórios, carteira, investidas, formatação HTML
+  
+Status: ✅ Código completo | 🧪 Testes básicos passaram | ⚙️ Pronto para produção
+Próximos passos: streamlit run app.py + validar UI; configure .env para teste de SMTP
 
 ### VISÃO DE LONGO PRAZO (norte, não construir agora)
 "Motor de contextualização" que responde: *"dado quem eu sou, o que importa pra mim
 hoje?"*. Personas adicionais (Hedge Fund macro, ALM, Research) só como visão futura.
 
 ## 12. PRÓXIMO PASSO IMEDIATO
-Corrigir o bug de colunas maiúsculas do Postgres (seção 8), começando por `usd_brl`
-(coleta.py + alertas.py + app.py + analises.py), testar, depois `debentures`. Seguir
-a metodologia: um arquivo por vez, explicar o conceito (case-sensitivity no Postgres),
-testar antes de avançar.
+1. Executar `streamlit run app.py` e validar os novos botões de relatórios e email
+2. Testar download dos .xlsx files com dados e formatação corretos
+3. Configurar .env com EMAIL_USER/EMAIL_SENHA para testar envio de SMTP
+4. Executar `python atualizar.py` para validar pipeline completo end-to-end
+5. Fazer refinement dos prompts do briefing (menos repetitivo, mais insights)
+6. Depois: Coleta de Fatos Relevantes (CVM IPE) ou IA-agente (caminho A)

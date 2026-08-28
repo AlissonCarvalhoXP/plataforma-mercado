@@ -6,12 +6,20 @@ from analise_ia import gerar_briefing, gerar_destaques
 
 from db import engine
 
-# 1) montar o contexto (indicadores + noticias de mercado)
+# 1) montar o contexto (indicadores + noticias + CARTEIRA)
 contexto = "\n".join([
     analisar_dolar(),
     analisar_selic(),
     analisar_debentures(),
 ])
+
+# Injetar contexto da carteira do usuario
+try:
+    from carteira import gerar_contexto_carteira
+    contexto += "\n\n" + gerar_contexto_carteira()
+except Exception:
+    pass
+
 noticias = pd.read_sql(
     "SELECT titulo FROM noticias WHERE categoria NOT IN ('Outros', '')",
     engine,

@@ -1,0 +1,35 @@
+name: Daily Market Update
+
+on:
+  schedule:
+    # Roda de segunda a sexta às 07:00 UTC (04:00 BRT)
+    - cron: '0 7 * * 1-5'
+  # Permite disparo manual
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      
+      - name: Run daily update pipeline
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_SENHA: ${{ secrets.EMAIL_SENHA }}
+        run: python atualizar.py
+      
+      - name: Report status
+        if: always()
+        run: echo "Pipeline execution completed"
