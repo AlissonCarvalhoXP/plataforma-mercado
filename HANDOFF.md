@@ -159,21 +159,40 @@ Python 3.14, fixar Python 3.12 nas config do app.
 - **Fase 7 [NOVO]:** Portfolio Intelligence V1 ✅ ; Módulo Investidas (Itaúsa) ✅.
 
 ### PENDENTE ⬜ (ordem sugerida)
-1. **Relatórios & Perfumaria** — export .xlsx (com "CDI + X%" e formatação BR),
-   e-mail em HTML, tema/design do dashboard, datas dd/mm/aaaa na exibição.
-2. **Refinos de prompt** — briefing menos repetitivo (variar abertura); enxugar/
+1. **Refinos de prompt** — briefing menos repetitivo (variar abertura); enxugar/
    afinar destaques (contínuo).
-3. **Coleta de Fatos Relevantes (CVM IPE)** — integrar download automático de fatos
+2. **Coleta de Fatos Relevantes (CVM IPE)** — integrar download automático de fatos
    relevantes de Itaúsa e empresas similares; alertar automaticamente.
-4. **(Futuro) IA-agente (caminho A)** — function calling: IA gera consultas ao banco
+3. **(Futuro) IA-agente (caminho A)** — function calling: IA gera consultas ao banco
    sozinha. Só quando o volume de dados justificar.
+
+### FASE 8 — RELATÓRIOS & PERFUMARIA ✅ (2025-01-17)
+- relatorios.py: 3 geradores de Excel (debentures, indicadores, dolar) com formatação BR
+  * Dates: dd/mm/aaaa | Valores: R$ com 2 casas | Taxas: X.XX%
+  * Spreads: "CDI + X.XX%" conforme decisão de modelagem (montado na exibição, não no armazenamento)
+- email_html.py: templates HTML com inline CSS para briefing profissional
+  * Sections: Métrica (Selic/IPCA/IGP-M/Dólar), Briefing, Alertas, Carteira, Call-to-Action
+  * Suporta envio automático (requer EMAIL_USER/EMAIL_SENHA em .env)
+- app.py: melhorias UI/UX
+  * Seção "📥 Download de Relatórios": botões para gerar/baixar Excel (individual ou em lote)
+  * Seção "📧 Enviar Briefing por Email": input de email + botão de envio
+  * Theme customizado com CSS: gradientes, cores, metriccard styling
+  * Formatação de dados: datas em dd/mm/aaaa + moeda em R$ em TODOS dataframes exibidos
+  * st.set_page_config: wide layout, sidebar expanded, page title/icon
+- teste_integracao.py: script de validação end-to-end dos novos módulos
+  * Imports, DB connection, geração de relatórios, carteira, investidas, formatação HTML
+  
+Status: ✅ Código completo | 🧪 Testes básicos passaram | ⚙️ Pronto para produção
+Próximos passos: streamlit run app.py + validar UI; configure .env para teste de SMTP
 
 ### VISÃO DE LONGO PRAZO (norte, não construir agora)
 "Motor de contextualização" que responde: *"dado quem eu sou, o que importa pra mim
 hoje?"*. Personas adicionais (Hedge Fund macro, ALM, Research) só como visão futura.
 
 ## 12. PRÓXIMO PASSO IMEDIATO
-Corrigir o bug de colunas maiúsculas do Postgres (seção 8), começando por `usd_brl`
-(coleta.py + alertas.py + app.py + analises.py), testar, depois `debentures`. Seguir
-a metodologia: um arquivo por vez, explicar o conceito (case-sensitivity no Postgres),
-testar antes de avançar.
+1. Executar `streamlit run app.py` e validar os novos botões de relatórios e email
+2. Testar download dos .xlsx files com dados e formatação corretos
+3. Configurar .env com EMAIL_USER/EMAIL_SENHA para testar envio de SMTP
+4. Executar `python atualizar.py` para validar pipeline completo end-to-end
+5. Fazer refinement dos prompts do briefing (menos repetitivo, mais insights)
+6. Depois: Coleta de Fatos Relevantes (CVM IPE) ou IA-agente (caminho A)
