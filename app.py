@@ -1,10 +1,62 @@
 # app.py
 import streamlit as st
 import pandas as pd
+from datetime import datetime
 from db import engine
 
-st.title("Market Intelligence Hub")
-st.write("Acompanhamento de indicadores de mercado.")
+# Configurar tema e layout
+st.set_page_config(
+    page_title="Market Intelligence Hub",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# CSS customizado
+st.markdown("""
+<style>
+    /* Tema de cores */
+    :root {
+        --primary-color: #1e3c72;
+        --secondary-color: #2a5298;
+    }
+    
+    /* Header */
+    .main-title {
+        background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+        color: white;
+        padding: 20px;
+        border-radius: 8px;
+        text-align: center;
+        margin-bottom: 20px;
+    }
+    
+    /* Métrica destaque */
+    .metric-card {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        padding: 15px;
+        border-radius: 8px;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown('<div class="main-title"><h1>📊 Market Intelligence Hub</h1><p>Suporte à Decisão em Tesouraria e Global Markets</p></div>', unsafe_allow_html=True)
+
+# Função auxiliar: formatar data para BR
+def formatar_data_br(data):
+    if pd.isna(data):
+        return ""
+    if isinstance(data, str):
+        data = pd.to_datetime(data)
+    return data.strftime("%d/%m/%Y")
+
+# Função auxiliar: formatar moeda
+def formatar_moeda(valor):
+    if pd.isna(valor):
+        return ""
+    return f"R$ {valor:,.2f}".replace(",", "#").replace(".", ",").replace("#", ".")
 
 # --- BRIEFING DO DIA (IA) ---
 st.subheader("🤖 Briefing do dia")
@@ -41,7 +93,12 @@ c4.metric("IGP-M (% mes)", round(ultimo_valor("IGP-M"), 2))
 dolar = pd.read_sql("SELECT * FROM usd_brl ORDER BY date", engine)
 st.subheader("Dólar (USD/BRL) — fechamento diario")
 st.line_chart(dolar, x="date", y="close")
-st.dataframe(dolar)
+
+# Formatar dados para exibição
+dolar_display = dolar.copy()
+dolar_display["date"] = dolar_display["date"].apply(formatar_data_br)
+dolar_display["close"] = dolar_display["close"].apply(lambda x: f"R$ {x:.4f}")
+st.dataframe(dolar_display, use_container_width=True, hide_index=True)
 
 # --- DEBENTURES (novas emissoes CVM) ---
 st.subheader("Debêntures — novas emissões (CVM)")
@@ -66,11 +123,22 @@ st.write("**Emissões por indexador**")
 st.bar_chart(deb["indexador"].value_counts())
 
 st.write("**Detalhe das séries**")
-st.dataframe(deb[[
+deb_display = deb[[
     "nome_emissor", "serie", "indexador", "spread", "valor_serie", "prazo_anos",
     "data_emissao", "data_vencimento", "rating", "titulo_incentivado",
     "nome_lider", "agente_fiduciario", "data_encerramento", "link_sre",
-]])
+]].copy()
+
+# Formatar datas
+deb_display["data_emissao"] = deb_display["data_emissao"].apply(formatar_data_br)
+deb_display["data_vencimento"] = deb_display["data_vencimento"].apply(formatar_data_br)
+deb_display["data_encerramento"] = deb_display["data_encerramento"].apply(formatar_data_br)
+
+# Formatar valores
+deb_display["valor_serie"] = deb_display["valor_serie"].apply(lambda x: formatar_moeda(x/1e6) if pd.notna(x) else "")
+deb_display["spread"] = deb_display["spread"].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "")
+
+st.dataframe(deb_display, use_container_width=True, hide_index=True)
 
 # --- NOTICIAS ---
 st.subheader("Notícias de mercado")
@@ -134,6 +202,114 @@ try:
     
 except Exception as e:
     st.warning(f"Erro ao carregar carteira: {e}")
+
+# --- RELATORIOS & DOWNLOADS ---
+st.subheader("📥 Download de Relatórios")
+try:
+    from relatorios import gerar_relatorio_debentures, gerar_relatorio_indicadores, gerar_relatorio_dolar
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("📊 Relatório Debentures", use_container_width=True):
+            try:
+                caminho = gerar_relatorio_debentures()
+                with open(caminho, "rb") as f:
+                    st.download_button(
+                        label="⬇️ Baixar Debentures.xlsx",
+                        data=f.read(),
+                        file_name="relatorio_debentures.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                st.success("✅ Relatório gerado!")
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório: {e}")
+    
+    with col2:
+        if st.button("📈 Relatório Indicadores", use_container_width=True):
+            try:
+                caminho = gerar_relatorio_indicadores()
+                with open(caminho, "rb") as f:
+                    st.download_button(
+                        label="⬇️ Baixar Indicadores.xlsx",
+                        data=f.read(),
+                        file_name="relatorio_indicadores.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                st.success("✅ Relatório gerado!")
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório: {e}")
+    
+    with col3:
+        if st.button("💵 Relatório Dólar", use_container_width=True):
+            try:
+                caminho = gerar_relatorio_dolar()
+                with open(caminho, "rb") as f:
+                    st.download_button(
+                        label="⬇️ Baixar Dolar.xlsx",
+                        data=f.read(),
+                        file_name="relatorio_dolar.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True
+                    )
+                st.success("✅ Relatório gerado!")
+            except Exception as e:
+                st.error(f"Erro ao gerar relatório: {e}")
+    
+    # Opção de gerar todos
+    if st.button("🎯 Gerar Todos os Relatórios", use_container_width=True):
+        try:
+            from relatorios import exportar_todos_relatorios
+            arquivos = exportar_todos_relatorios()
+            st.success(f"✅ {len(arquivos)} relatórios gerados com sucesso!")
+            for arquivo in arquivos:
+                st.info(f"📄 {arquivo}")
+        except Exception as e:
+            st.error(f"Erro ao gerar relatórios: {e}")
+
+except Exception as e:
+    st.warning(f"Erro ao carregar relatórios: {e}")
+
+# --- EMAIL BRIEFING ---
+st.subheader("📧 Enviar Briefing por Email")
+try:
+    from email_html import enviar_email_html
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        email_destino = st.text_input("Email destino:", placeholder="seu-email@empresa.com")
+    
+    with col2:
+        if st.button("📤 Enviar Briefing", use_container_width=True):
+            if email_destino:
+                try:
+                    with st.spinner("Enviando email..."):
+                        # Coletar dados para email
+                        from coleta import ultimo_valor
+                        
+                        dados = {
+                            "selic": round(ultimo_valor("Selic"), 2),
+                            "ipca": round(ultimo_valor("IPCA"), 2),
+                            "igp_m": round(ultimo_valor("IGP-M"), 2),
+                            "dolar": dolar["close"].iloc[-1] if not dolar.empty else 0,
+                            "data": formatar_data_br(pd.Timestamp.now())
+                        }
+                        
+                        success = enviar_email_html(email_destino, dados)
+                        if success:
+                            st.success("✅ Email enviado com sucesso!")
+                        else:
+                            st.error("❌ Falha ao enviar email. Verifique configurações .env")
+                except Exception as e:
+                    st.error(f"Erro: {e}")
+            else:
+                st.warning("Por favor, digite um email válido.")
+
+except Exception as e:
+    st.info(f"📧 Email não configurado: {e}")
 
 # --- PERGUNTE A PLATAFORMA (IA) ---
 st.subheader("💬 Pergunte à plataforma")
