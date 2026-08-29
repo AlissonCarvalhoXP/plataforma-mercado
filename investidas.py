@@ -141,18 +141,19 @@ def filtrar_noticias_por_empresa(nome_empresa):
     if not nome_empresa:
         return pd.DataFrame(columns=['titulo', 'link', 'data', 'categoria'])
     try:
-        with engine.connect() as conn:
-            df = pd.read_sql(
+        df = pd.read_sql(
+            text(
                 """
                 SELECT titulo, link, data, categoria
                 FROM noticias
                 WHERE UPPER(titulo) LIKE UPPER(:padrao)
                 ORDER BY data DESC NULLS LAST
                 LIMIT 10
-                """,
-                engine,
-                params={"padrao": f"%{nome_empresa}%"},
-            )
+                """
+            ),
+            engine,
+            params={"padrao": f"%{nome_empresa}%"},
+        )
         return df
     except Exception as e:
         print(f"[ERRO] Falha ao filtrar noticias: {e}")
