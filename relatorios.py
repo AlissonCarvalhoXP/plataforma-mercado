@@ -108,14 +108,25 @@ def gerar_relatorio_indicadores():
         relatorio = ind.pivot_table(index='data', columns='indicador', values='valor')
         relatorio.columns.name = None
         relatorio = relatorio.reset_index()
-        relatorio.columns = ['Data', 'CDI (%)', 'IPCA (% mês)', 'IGP-M (% mês)', 'Selic (% a.a.)']
-        
+
+        # Renomear por NOME do indicador, nunca por posicao: pivot_table
+        # ordena as colunas alfabeticamente (CDI, IGP-M, IPCA, Selic), entao
+        # uma lista fixa na ordem "esperada" desalinha os valores.
+        relatorio = relatorio.rename(columns={
+            'data': 'Data',
+            'CDI': 'CDI (%)',
+            'IPCA': 'IPCA (% mês)',
+            'IGP-M': 'IGP-M (% mês)',
+            'Selic': 'Selic (% a.a.)',
+        })
+
         # Formatar data
         relatorio['Data'] = relatorio['Data'].apply(formatar_data_br)
-        
-        # Formatar taxas
-        for col in ['CDI (%)', 'IPCA (% mês)', 'IGP-M (% mês)', 'Selic (% a.a.)']:
-            relatorio[col] = relatorio[col].apply(formatar_taxa)
+
+        # Formatar taxas (todas as colunas de indicador, exceto Data)
+        for col in relatorio.columns:
+            if col != 'Data':
+                relatorio[col] = relatorio[col].apply(formatar_taxa)
         
         # Salvar
         arquivo = "relatorio_indicadores.xlsx"
