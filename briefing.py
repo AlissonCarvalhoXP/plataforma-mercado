@@ -30,8 +30,9 @@ try:
     carteira_df = ler_carteira()
 
     sinais = gerar_sinais_exposicao(carteira_df, indicadores_df, dolar_df)
-    if sinais:
-        contexto += "\n\nSinais de exposição da carteira:\n" + "\n".join(f"- {s['texto']}" for s in sinais)
+    sinais_relevantes = [s for s in sinais if s["sentido_impacto"] != "neutro"]
+    if sinais_relevantes:
+        contexto += "\n\nSinais de exposição da carteira:\n" + "\n".join(f"- {s['texto']}" for s in sinais_relevantes)
 except Exception:
     pass
 

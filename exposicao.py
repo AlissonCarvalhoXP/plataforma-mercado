@@ -46,15 +46,19 @@ def _calcular_deltas(df_indicadores, df_dolar):
 
     if df_indicadores is not None and not df_indicadores.empty:
         for nome in ("Selic", "IPCA"):
-            serie = df_indicadores[df_indicadores["indicador"] == nome].sort_values("data")
+            serie = (df_indicadores[df_indicadores["indicador"] == nome]
+                     .sort_values("data")
+                     .drop_duplicates(subset="data", keep="last"))
             if len(serie) >= 2:
                 valores = serie["valor"].tolist()
                 deltas[nome] = valores[-1] - valores[-2]
 
     if df_dolar is not None and len(df_dolar) >= 2:
-        serie = df_dolar.sort_values("date")
-        valores = serie["close"].tolist()
-        deltas["Dólar"] = valores[-1] - valores[-2]
+        serie = (df_dolar.sort_values("date")
+                 .drop_duplicates(subset="date", keep="last"))
+        if len(serie) >= 2:
+            valores = serie["close"].tolist()
+            deltas["Dólar"] = valores[-1] - valores[-2]
 
     return deltas
 
@@ -166,6 +170,8 @@ if __name__ == "__main__":
     assert por_indexador["CDI"]["sentido_impacto"] == "favoravel"
     assert por_indexador["Prefixado"]["sentido_impacto"] == "desfavoravel"
     assert sinais[0]["indexador"] == "Prefixado"  # desfavoravel vem primeiro
+    assert por_indexador["CDI"]["texto"] == "Selic variou +0.25 p.p. -> favorece R$ 10.000,00 em CDI (long)"
+    assert por_indexador["Prefixado"]["texto"] == "Selic variou +0.25 p.p. -> pressiona R$ 5.000,00 em Prefixado (long)"
     print("[OK] Caso 3: CDI e Prefixado reagem em sentidos opostos ao mesmo delta de Selic.")
 
     # Caso 4: posicao short inverte o sentido do impacto
@@ -174,6 +180,7 @@ if __name__ == "__main__":
     ])
     sinal_dolar = gerar_sinais_exposicao(carteira_short, indicadores_ok, dolar_ok)[0]
     assert sinal_dolar["sentido_impacto"] == "desfavoravel"  # dolar subiu, posicao short perde
+    assert sinal_dolar["texto"] == "Dólar variou +R$ 0,03 -> pressiona R$ 20.000,00 em Dólar (short)"
     print("[OK] Caso 4: posicao short inverte o sentido do impacto.")
 
     # Caso 5: resumo_exposicao_por_indexador agrega por indexador
@@ -182,5 +189,16 @@ if __name__ == "__main__":
     assert resumo["Prefixado"] == 5000.0
     assert resumo_exposicao_por_indexador(carteira_vazia).empty
     print("[OK] Caso 5: resumo_exposicao_por_indexador agrega corretamente.")
+
+    # Caso 6: linhas duplicadas na ultima data nao podem fazer o delta colapsar para zero
+    # (regressao: banco real tem leituras duplicadas por data em indicadores_bcb/usd_brl)
+    dolar_com_duplicata = pd.DataFrame({
+        "date": pd.to_datetime(["2026-08-26", "2026-08-27", "2026-08-27"]),
+        "close": [5.35, 5.40, 5.40],
+    })
+    deltas_dup = _calcular_deltas(indicadores_ok, dolar_com_duplicata)
+    assert round(deltas_dup["Dólar"], 4) == 0.05  # 5.40 (27/08) - 5.35 (26/08), nao 5.40 - 5.40
+    assert deltas_dup["Dólar"] != 0.0  # sem o dedup, valores[-1]-valores[-2] colapsaria pra 0.0
+    print("[OK] Caso 6: linha duplicada na ultima data nao zera o delta (dedup por data aplicado).")
 
     print("\nTodos os casos passaram.")
