@@ -7,6 +7,7 @@ import streamlit as st
 
 from db import engine
 from modules.opcoes.view_opcoes import render_aba_opcoes
+from exposicao import gerar_sinais_exposicao, resumo_exposicao_por_indexador
 
 st.set_page_config(
     page_title="Market Intelligence Hub",
@@ -229,6 +230,12 @@ try:
 except Exception:
     deb = pd.DataFrame()
 
+try:
+    from carteira import ler_carteira
+    carteira_df = ler_carteira()
+except Exception:
+    carteira_df = pd.DataFrame(columns=["id", "ativo", "descricao", "direcao", "indexador", "tamanho"])
+
 
 # Helpers de download
 
@@ -266,11 +273,21 @@ with overview_tab:
     except Exception:
         pass
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Selic", f"{ultimo_valor('Selic'):.2f}%")
-    c2.metric("IPCA", f"{ultimo_valor('IPCA'):.2f}%")
-    c3.metric("IGP-M", f"{ultimo_valor('IGP-M'):.2f}%")
-    c4.metric("Dólar", formatar_moeda(float(dolar["close"].iloc[-1]) if not dolar.empty else 0))
+    st.markdown("**Exposição da carteira**")
+    resumo_exposicao = resumo_exposicao_por_indexador(carteira_df)
+    if resumo_exposicao.empty:
+        st.info("Carteira vazia, sem sinais a mostrar.")
+    else:
+        st.bar_chart(resumo_exposicao)
+
+        st.markdown("**Sinais do dia**")
+        sinais = gerar_sinais_exposicao(carteira_df, ind, dolar)
+        if not sinais:
+            st.caption("Sem sinais no momento (dados insuficientes para calcular variação).")
+        else:
+            badges = {"desfavoravel": "🔴", "favoravel": "🟢", "neutro": "⚪"}
+            for sinal in sinais:
+                st.markdown(f"{badges[sinal['sentido_impacto']]} {sinal['texto']}")
 
 with macro_tab:
     st.subheader("Indicadores macro")
