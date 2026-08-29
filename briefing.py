@@ -20,6 +20,21 @@ try:
 except Exception:
     pass
 
+# Injetar sinais de exposicao (carteira x indicadores macro)
+try:
+    from exposicao import gerar_sinais_exposicao
+    from carteira import ler_carteira
+
+    indicadores_df = pd.read_sql("SELECT * FROM indicadores_bcb", engine)
+    dolar_df = pd.read_sql("SELECT * FROM usd_brl ORDER BY date", engine)
+    carteira_df = ler_carteira()
+
+    sinais = gerar_sinais_exposicao(carteira_df, indicadores_df, dolar_df)
+    if sinais:
+        contexto += "\n\nSinais de exposição da carteira:\n" + "\n".join(f"- {s['texto']}" for s in sinais)
+except Exception:
+    pass
+
 noticias = pd.read_sql(
     "SELECT titulo FROM noticias WHERE categoria NOT IN ('Outros', '')",
     engine,
