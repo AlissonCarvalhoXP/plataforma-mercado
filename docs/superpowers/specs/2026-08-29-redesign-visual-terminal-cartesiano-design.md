@@ -98,7 +98,16 @@ paginas/
 
 O bloco estático da sidebar de hoje ("Operações" + lista de bullets repetindo os
 nomes das seções) é removido — fica redundante com a lista de navegação nativa.
-O botão "🤖 Assistente IA" permanece na sidebar, acima da lista de páginas.
+O botão "🤖 Assistente IA" permanece na sidebar.
+
+**Correção pós-implementação:** a posição do botão relativa à lista de páginas
+não é uma escolha livre — `st.navigation` renderiza a lista de páginas em uma
+posição fixa do layout da sidebar, então qualquer conteúdo adicionado antes de
+`pg.run()` (como este botão) aparece **abaixo** dela, não acima, independente da
+ordem das chamadas no código. A frase original desta seção ("acima da lista de
+páginas") descrevia uma posição inatingível com essa API e foi corrigida aqui
+após a revisão final de implementação constatar isso na renderização real do
+Streamlit 1.62.
 
 ## 4. Componentes novos
 
