@@ -48,7 +48,7 @@ def pagina_relatorios():
                         data=st.session_state[f"download_{arquivo_nome}"],
                         file_name=arquivo_nome,
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        use_container_width=True,
+                        width="stretch",
                     )
 
         if st.button("Gerar todos os relatórios"):

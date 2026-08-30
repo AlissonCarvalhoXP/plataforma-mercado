@@ -60,8 +60,8 @@ CSS = f"""
         font-weight: 600;
         border-left: 2px solid var(--accent);
         background: rgba(79, 214, 232, 0.06);
+        font-family: 'Space Grotesk', sans-serif;
     }}
-    div[data-testid="stVerticalBlockBorderWrapper"],
     .element-container > div > div {{
         background: transparent;
     }}

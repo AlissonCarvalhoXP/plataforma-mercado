@@ -41,7 +41,7 @@ def pagina_resumo():
     if resumo_exposicao.empty:
         st.info("Carteira vazia, sem sinais a mostrar.")
     else:
-        st.plotly_chart(grafico_barra(resumo_exposicao), use_container_width=True)
+        st.plotly_chart(grafico_barra(resumo_exposicao), width="stretch", theme=None)
 
         st.markdown("**Sinais do dia**")
         sinais = gerar_sinais_exposicao(carteira_df, ind, dolar)

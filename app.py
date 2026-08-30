@@ -34,7 +34,7 @@ st.markdown(
 )
 
 with st.sidebar:
-    if st.button("🤖 Assistente IA", use_container_width=True):
+    if st.button("🤖 Assistente IA", width="stretch"):
         st.session_state["ia_open"] = True
 
 pg = st.navigation([

@@ -32,7 +32,7 @@ def pagina_carteira():
 
         df_editado = st.data_editor(
             df_carteira[cols],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             key="carteira_editor",
             num_rows="dynamic",

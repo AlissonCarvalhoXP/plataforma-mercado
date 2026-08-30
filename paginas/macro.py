@@ -26,11 +26,11 @@ def pagina_macro():
 
     st.subheader("Dólar (USD/BRL)")
     if not dolar.empty:
-        st.plotly_chart(grafico_linha(dolar, "date", "close", titulo="USD/BRL"), use_container_width=True)
+        st.plotly_chart(grafico_linha(dolar, "date", "close", titulo="USD/BRL"), width="stretch", theme=None)
         dolar_display = dolar.copy()
         dolar_display["date"] = dolar_display["date"].apply(formatar_data_br)
         dolar_display["close"] = dolar_display["close"].apply(lambda x: f"R$ {x:.4f}")
-        st.dataframe(dolar_display, use_container_width=True, hide_index=True)
+        st.dataframe(dolar_display, width="stretch", hide_index=True)
     else:
         st.info("Sem dados de dólar disponíveis.")
 
@@ -40,7 +40,7 @@ def pagina_macro():
         d1.metric("Séries coletadas", len(deb))
         d2.metric("Volume total (R$ bi)", round(deb["valor_serie"].sum() / 1e9, 2))
         st.write("**Emissões por indexador**")
-        st.plotly_chart(grafico_barra(deb["indexador"].value_counts()), use_container_width=True)
+        st.plotly_chart(grafico_barra(deb["indexador"].value_counts()), width="stretch", theme=None)
         deb_display = deb[[
             "nome_emissor", "serie", "indexador", "spread", "valor_serie", "prazo_anos",
             "data_emissao", "data_vencimento", "rating", "titulo_incentivado",
@@ -53,6 +53,6 @@ def pagina_macro():
             deb_display["valor_serie"] = deb_display["valor_serie"].apply(lambda x: formatar_moeda(x / 1e6) if pd.notna(x) else "")
         if "spread" in deb_display.columns:
             deb_display["spread"] = deb_display["spread"].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "")
-        st.dataframe(deb_display, use_container_width=True, hide_index=True)
+        st.dataframe(deb_display, width="stretch", hide_index=True)
     else:
         st.info("Sem dados de debêntures disponíveis.")

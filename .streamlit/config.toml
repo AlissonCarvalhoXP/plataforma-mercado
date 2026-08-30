@@ -1,0 +1,17 @@
+[theme]
+base = "dark"
+primaryColor = "#4FD6E8"
+backgroundColor = "#0A0E14"
+secondaryBackgroundColor = "#10161F"
+textColor = "#E3E9F1"
+borderColor = "#2A3542"
+font = "IBM Plex Sans"
+headingFont = "Space Grotesk"
+codeFont = "IBM Plex Mono"
+chartCategoricalColors = ["#4FD6E8", "#3DDC84", "#FF7A59", "#8C9BB0"]
+dataframeHeaderBackgroundColor = "#10161F"
+dataframeBorderColor = "#2A3542"
+
+[theme.sidebar]
+backgroundColor = "#0A0E14"
+borderColor = "#2A3542"
