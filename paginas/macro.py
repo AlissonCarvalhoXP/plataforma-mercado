@@ -45,7 +45,12 @@ def pagina_macro():
     st.subheader("Dólar (USD/BRL)")
     if not dolar.empty:
         st.plotly_chart(grafico_linha(dolar, "date", "close", titulo="USD/BRL"), width="stretch", theme=None)
-        st.dataframe(dolar, width="stretch", hide_index=True, column_config=colunas_dolar())
+        st.dataframe(
+            dolar.assign(date=pd.to_datetime(dolar["date"], errors="coerce")),
+            width="stretch",
+            hide_index=True,
+            column_config=colunas_dolar(),
+        )
     else:
         st.info("Sem dados de dólar disponíveis.")
 

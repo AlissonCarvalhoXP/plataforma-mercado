@@ -55,7 +55,7 @@ def destacar_spread(df):
         estilos[indice_spread] = _cor_fundo_spread(row["spread"], medias.loc[row.name])
         return estilos
 
-    return df.style.apply(_estilo_linha, axis=1)
+    return df.style.apply(_estilo_linha, axis=1).format(na_rep="")
 
 
 def colunas_dolar():

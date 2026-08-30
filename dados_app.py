@@ -82,7 +82,7 @@ def normalizar_indicador(valor):
 
 def ultimo_valor(df_indicadores, nome):
     chave = normalizar_indicador(nome)
-    serie = df_indicadores[df_indicadores["indicador"].map(normalizar_indicador) == chave]
+    serie = df_indicadores[df_indicadores["indicador"].map(normalizar_indicador) == chave].sort_values("data")
     if serie.empty:
         return 0.0
     return float(serie["valor"].iloc[-1])
