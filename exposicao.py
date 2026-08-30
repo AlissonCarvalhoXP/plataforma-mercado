@@ -39,9 +39,30 @@ def _formatar_delta(gatilho, delta):
     return f"{delta:+.2f} p.p."
 
 
+def _ultima_variacao(valores):
+    """Delta entre o ultimo valor de uma serie (ja ordenada e sem datas
+    duplicadas) e o ultimo valor DIFERENTE dele no historico disponivel.
+
+    Nao compara com a leitura imediatamente anterior: series como a Selic
+    ficam paradas por semanas entre reunioes do Copom, e comparar com a
+    leitura anterior geraria quase sempre um delta 0.0 (a oposicao CDI vs.
+    Prefixado, que depende desse delta, nunca apareceria fora de um dia de
+    mudanca de taxa). Retorna None se a serie tiver menos de 2 valores ou se
+    todo o historico disponivel for igual ao valor atual (nada mudou no
+    periodo coletado - sem dado para gerar um sinal, nao um delta 0.0)."""
+    if not valores:
+        return None
+    atual = valores[-1]
+    for anterior in reversed(valores[:-1]):
+        if anterior != atual:
+            return atual - anterior
+    return None
+
+
 def _calcular_deltas(df_indicadores, df_dolar):
-    """Delta = ultima leitura - leitura imediatamente anterior, por serie.
-    Series com menos de 2 leituras nao entram no dict (sem dado suficiente)."""
+    """Delta = ultima leitura - ultima leitura DIFERENTE dela, por serie
+    (ver _ultima_variacao). Series sem nenhuma leitura diferente da atual
+    no historico disponivel nao entram no dict (sem dado suficiente)."""
     deltas = {}
 
     if df_indicadores is not None and not df_indicadores.empty:
@@ -49,16 +70,16 @@ def _calcular_deltas(df_indicadores, df_dolar):
             serie = (df_indicadores[df_indicadores["indicador"] == nome]
                      .sort_values("data")
                      .drop_duplicates(subset="data", keep="last"))
-            if len(serie) >= 2:
-                valores = serie["valor"].tolist()
-                deltas[nome] = valores[-1] - valores[-2]
+            delta = _ultima_variacao(serie["valor"].tolist())
+            if delta is not None:
+                deltas[nome] = delta
 
-    if df_dolar is not None and len(df_dolar) >= 2:
+    if df_dolar is not None and not df_dolar.empty:
         serie = (df_dolar.sort_values("date")
                  .drop_duplicates(subset="date", keep="last"))
-        if len(serie) >= 2:
-            valores = serie["close"].tolist()
-            deltas["Dólar"] = valores[-1] - valores[-2]
+        delta = _ultima_variacao(serie["close"].tolist())
+        if delta is not None:
+            deltas["Dólar"] = delta
 
     return deltas
 
@@ -74,7 +95,8 @@ def _montar_texto(indexador, direcao, valor_exposto, gatilho, delta, sentido_imp
 def gerar_sinais_exposicao(df_carteira, df_indicadores, df_dolar):
     """Cruza a exposicao da carteira (por indexador/direcao) com os ultimos
     movimentos macro coletados. Devolve lista de sinais ordenada com os
-    desfavoraveis primeiro. Nunca inventa sinal quando falta leitura anterior."""
+    desfavoraveis primeiro. Nunca inventa sinal quando a serie nao tem
+    nenhuma leitura diferente da atual no historico disponivel."""
     if df_carteira is None or df_carteira.empty:
         return []
 
@@ -200,5 +222,27 @@ if __name__ == "__main__":
     assert round(deltas_dup["Dólar"], 4) == 0.05  # 5.40 (27/08) - 5.35 (26/08), nao 5.40 - 5.40
     assert deltas_dup["Dólar"] != 0.0  # sem o dedup, valores[-1]-valores[-2] colapsaria pra 0.0
     print("[OK] Caso 6: linha duplicada na ultima data nao zera o delta (dedup por data aplicado).")
+
+    # Caso 7: Selic parada ha semanas (varias leituras iguais) mas mudou antes disso ->
+    # a variacao deve ser contra a ultima leitura DIFERENTE, nao a leitura anterior (que e igual)
+    indicadores_selic_step = pd.DataFrame({
+        "indicador": ["Selic"] * 5,
+        "data": pd.to_datetime(["2026-06-01", "2026-06-15", "2026-07-01", "2026-07-15", "2026-08-01"]),
+        "valor": [13.75, 14.00, 14.00, 14.00, 14.00],
+    })
+    deltas_step = _calcular_deltas(indicadores_selic_step, dolar_ok)
+    assert round(deltas_step["Selic"], 2) == 0.25  # 14.00 atual vs 13.75 (ultima leitura diferente), nao 14.00 - 14.00
+    print("[OK] Caso 7: Selic parada ha semanas -> variacao calculada contra a ultima leitura diferente.")
+
+    # Caso 8: serie inteiramente parada no historico disponivel -> sem sinal (nao inventa delta 0.0)
+    indicadores_selic_flat = pd.DataFrame({
+        "indicador": ["Selic"] * 3,
+        "data": pd.to_datetime(["2026-07-01", "2026-07-15", "2026-08-01"]),
+        "valor": [14.00, 14.00, 14.00],
+    })
+    deltas_flat = _calcular_deltas(indicadores_selic_flat, dolar_ok)
+    assert "Selic" not in deltas_flat
+    assert gerar_sinais_exposicao(carteira_cdi, indicadores_selic_flat, dolar_ok) == []
+    print("[OK] Caso 8: Selic sem nenhuma leitura diferente no historico -> nenhum sinal gerado.")
 
     print("\nTodos os casos passaram.")

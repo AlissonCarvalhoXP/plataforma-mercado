@@ -87,10 +87,25 @@ R$ 15.000 em Prefixado (long)"*.
 
 `analisar_selic()` (em `analises.py`) hoje compara a leitura atual com o primeiro
 registro histórico da série — pouco útil para "o que mudou agora". `exposicao.py`
-padroniza para **última leitura vs. leitura imediatamente anterior** de cada
-série (Selic, IPCA, USD/BRL), respondendo diretamente "o que acabou de mudar" ao
-invés de uma variação de longo prazo. Esse módulo não reutiliza a janela de 6
-leituras de `analisar_dolar()`.
+não reutiliza essa lógica, nem a janela de 6 leituras de `analisar_dolar()`.
+
+> **Revisão (2026-08-29, pós-implementação):** a versão inicial deste documento
+> especificava "última leitura vs. leitura imediatamente anterior" de forma
+> uniforme para Selic, IPCA e USD/BRL. Na prática, a Selic (SGS 432) é uma
+> função-degrau que só muda em dias de reunião do Copom (~8x/ano) — comparar
+> com a leitura imediatamente anterior fazia CDI e Prefixado ficarem `neutro`
+> na quase totalidade dos dias, escondendo justamente a oposição entre eles que
+> é o ponto central do design (seção 3.1). A regra foi revisada para **última
+> leitura vs. última leitura DIFERENTE dela** no histórico disponível (sem
+> limite de quanto tempo olhar para trás — o volume de dados é pequeno):
+> - Se a série inteira disponível for igual ao valor atual (nunca mudou no
+>   período coletado), não gera sinal — mesmo tratamento do caso "dados
+>   insuficientes" (nunca um delta 0,0 fabricado).
+> - Aplicada uniformemente a Selic, IPCA e USD/BRL: para IPCA e Dólar, que
+>   raramente repetem valor exato entre leituras consecutivas, o comportamento
+>   na prática não muda — a leitura "diferente mais recente" quase sempre
+>   coincide com a leitura imediatamente anterior.
+> - Implementação: `exposicao._ultima_variacao()`.
 
 ### 3.3 Ordenação
 
