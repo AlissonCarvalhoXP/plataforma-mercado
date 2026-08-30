@@ -17,12 +17,14 @@ DISCLAIMER = ("⚠️ Ferramenta de apoio à decisão e estudo quantitativo. "
               "NÃO constitui recomendação de investimento.")
 
 
-def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None):
+def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
+                       carteira_df: "pd.DataFrame | None" = None):
     import streamlit as st
     import pandas as pd
     import plotly.graph_objects as go
     import db_opcoes
     import analises_opcoes as ao
+    import coleta_opcoes as co
 
     st.subheader("🎯 Opções B3 · Screener de Assimetria IV × HV")
     st.caption("Fonte: brapi.dev (EOD) · Preço justo via Black-Scholes · " + DISCLAIMER)
@@ -94,3 +96,39 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None):
         else:
             st.write("Sem distorção clara → **travas de débito direcionais** ou aguardar assimetria.")
         st.caption(DISCLAIMER)
+
+    # Sugestoes de hedge para a carteira do usuario - secao aditiva, nao
+    # substitui nem depende do ranking/screener acima (que continua cobrindo
+    # qualquer ativo coletado, com ou sem posicao na carteira).
+    if carteira_df is not None and not carteira_df.empty:
+        st.markdown("---")
+        st.subheader("🛡️ Sugestões de hedge para sua carteira")
+        st.caption(DISCLAIMER)
+
+        posicoes_acoes = [
+            row for row in carteira_df.to_dict("records")
+            if co.PADRAO_TICKER_B3.match(str(row.get("ativo", "")).strip().upper())
+        ]
+        if not posicoes_acoes:
+            st.info("Nenhuma posição em ações reconhecida na carteira.")
+        else:
+            for posicao in posicoes_acoes:
+                ticker = str(posicao["ativo"]).strip().upper()
+                posicao_norm = {**posicao, "ativo": ticker}
+                und_pos, series_pos = db_opcoes.read_latest_chain(ticker, db_path)
+                if not und_pos or not series_pos:
+                    st.warning(
+                        f"Sem dados de opções disponíveis para {ticker} "
+                        "(requer plano Pro da brapi)."
+                    )
+                    continue
+                rank_pos = ao.analisar(und_pos, series_pos, selic=selic)
+                regime_pos = ao.regime_volatilidade(series_pos, und_pos["HV_60d"])
+                sugestao = ao.sugerir_hedge(posicao_norm, rank_pos, und_pos["Spot"], regime_pos)
+                if sugestao is None:
+                    st.caption(
+                        f"{ticker}: sem sugestão de hedge no momento "
+                        f"(regime `{regime_pos}` sem série OTM adequada)."
+                    )
+                else:
+                    st.markdown(f"- {sugestao['texto']}")
