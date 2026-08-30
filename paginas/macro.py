@@ -13,14 +13,24 @@ from graficos import grafico_barra, grafico_linha
 from tabelas import colunas_debentures, colunas_dolar, destacar_spread, progresso_prazo
 
 
-def _kpi_indicador(ind, nome, label, casas=2):
+def _kpi_indicador(ind, nome, label, casas=2, inverter=False, avaliar=True):
+    """`avaliar=False`: o delta mostra so a seta, sem cor de julgamento (usado
+    em Selic/CDI - juros tem leitura ambigua: bom pra poupador, ruim pra
+    tomador). `avaliar=True` (padrao) usa `inverter` para decidir a cor:
+    inverter=True inverte a leitura (usado em IPCA/IGP-M - inflacao subindo
+    e' desfavoravel, caindo e' favoravel)."""
     valor = round(ultimo_valor(ind, nome), casas)
     valor_texto = f"{valor:.{casas}f}%"
     delta = calcular_delta_indicador(ind, nome)
     if delta is None:
         return kpi_card(label, valor_texto)
     seta = "▲" if delta > 0 else ("▼" if delta < 0 else "•")
-    sentido = "positivo" if delta > 0 else ("negativo" if delta < 0 else "neutro")
+    if not avaliar or delta == 0:
+        sentido = "neutro"
+    elif (delta > 0) != inverter:
+        sentido = "positivo"
+    else:
+        sentido = "negativo"
     delta_texto = f"{seta} {delta:+.{casas}f} p.p."
     return kpi_card(label, valor_texto, delta_texto, sentido)
 
@@ -34,13 +44,13 @@ def pagina_macro():
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.markdown(_kpi_indicador(ind, "Selic", "Selic (% a.a.)"), unsafe_allow_html=True)
+        st.markdown(_kpi_indicador(ind, "Selic", "Selic (% a.a.)", avaliar=False), unsafe_allow_html=True)
     with c2:
-        st.markdown(_kpi_indicador(ind, "CDI", "CDI (% a.d.)", casas=4), unsafe_allow_html=True)
+        st.markdown(_kpi_indicador(ind, "CDI", "CDI (% a.d.)", casas=4, avaliar=False), unsafe_allow_html=True)
     with c3:
-        st.markdown(_kpi_indicador(ind, "IPCA", "IPCA (% mês)"), unsafe_allow_html=True)
+        st.markdown(_kpi_indicador(ind, "IPCA", "IPCA (% mês)", inverter=True), unsafe_allow_html=True)
     with c4:
-        st.markdown(_kpi_indicador(ind, "IGP-M", "IGP-M (% mês)"), unsafe_allow_html=True)
+        st.markdown(_kpi_indicador(ind, "IGP-M", "IGP-M (% mês)", inverter=True), unsafe_allow_html=True)
 
     st.subheader("Dólar (USD/BRL)")
     if not dolar.empty:
