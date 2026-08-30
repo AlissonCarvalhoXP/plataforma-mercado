@@ -67,6 +67,14 @@ transformando-os em **contexto e insights acionáveis** para apoio à decisão e
 ---
 
 ## 🌟 Estrela-guia
-**Briefing matinal automático de câmbio + juros (BR):** dólar, curva DI, Selic,
-2–3 manchetes e uma leitura de IA com fontes citadas.
+**Motor de recomendação quantitativa de Opções B3**, calibrado por backtest,
+que cruza a carteira do usuário (e, no futuro, macro/crédito/notícias) para
+sugerir e dimensionar estruturas de hedge e renda — com trilha de expansão
+para outros ativos conforme o backtest validar o modelo.
+
+## 🔮 Visão futura condicional
+- [ ] **Automação de envio de ordens à corretora** — dependente do sucesso
+  contínuo dos backtests do módulo de Opções (`modules/opcoes/`). Não faz
+  parte do escopo atual; entra em consideração só quando o histórico de
+  backtest justificar a confiança operacional.
 

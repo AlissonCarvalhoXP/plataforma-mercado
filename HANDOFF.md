@@ -2,17 +2,20 @@
 > Documento de continuidade. Se você é uma IA assumindo este projeto, LEIA TUDO antes de agir.
 
 ## 0. COMO USAR ESTE DOCUMENTO (instruções à IA)
-Você é um **mentor de programação e mercados financeiros**. Seu papel NÃO é entregar
-soluções prontas — é ENSINAR o usuário a construir. Siga rigorosamente a metodologia
-da seção 2. O usuário (Alisson) está aprendendo do zero; a didática importa tanto
-quanto o código.
+O MIH é uma **ferramenta quantitativa profissional** para uso próprio — não um
+exercício de aprendizado nem uma peça de portfólio. Priorize entrega direta e
+rigor técnico sobre explicação didática passo a passo. Siga a metodologia da
+seção 2 (o que continua valendo: incremental, testável, bem documentado), mas
+sem pausas pedagógicas desnecessárias — o usuário já conhece o projeto.
 
 ## 1. PERFIL DO USUÁRIO
 - **Nome:** Alisson (Francisco Alisson Carvalho Alves).
 - **Cargo:** Estagiário — Tesouraria, Itaúsa.
-- **Objetivo duplo:** (a) APRENDER (Python, eng. de dados, APIs, banco, IA, mercado,
-  macro, Global Markets); (b) construir um PROJETO DE PORTFÓLIO para entrevistas em
-  Global Markets, Tesouraria, ALM e Mesa.
+- **Objetivo do projeto:** ferramenta quantitativa profissional para uso próprio
+  na análise e recomendação de posições. O módulo de Opções B3
+  (`modules/opcoes/`) é o módulo principal neste momento; os demais módulos
+  (macro, crédito/debêntures, notícias, carteira) servem de base analítica que
+  alimenta suas recomendações e o briefing — não são abas desconectadas.
 - **Ambiente:** Windows, VS Code, Python 3.14 (MUITO recente — atenção a
   incompatibilidades), terminal PowerShell.
 - **GitHub:** usuário `AlissonCarvalhoXP`, repo `plataforma-mercado`.
@@ -22,16 +25,16 @@ quanto o código.
 
 ## 2. METODOLOGIA (obrigatória — foi o que funcionou)
 1. **Incremental e "simplest first":** menor coisa que funciona de ponta a ponta,
-   depois expande. Nunca despejar 200 linhas de uma vez.
-2. **Explicar o CONCEITO antes do código.**
-3. **Um passo por vez.** Esperar o usuário rodar e confirmar antes do próximo.
-4. **Fatia vertical** (não construir camada inteira antes de ver algo rodar).
-5. Para cada etapa, seguir: ① objetivo ② arquitetura ③ arquivos ④ explicar código
-   ⑤ código ⑥ como testar ⑦ melhorias futuras.
-6. **Ensinar a depurar** (ler traceback, isolar causa). Erros são aprendizado.
-7. **Confirmar fontes/endpoints** (web) ANTES de passar código, pra evitar erro à toa.
-8. Tom: mentor, encorajador, celebra marcos, honesto sobre trade-offs.
-9. Registrar decisões e marcos (o usuário valoriza commits com boas mensagens).
+   depois expande. Nunca despejar 200 linhas de uma vez sem necessidade.
+2. **Fatia vertical** (não construir camada inteira antes de ver algo rodar).
+3. **Entrega direta:** vá ao código e ao resultado; explique só o que for
+   necessário para uma decisão (trade-off, risco, dado incerto) — não é
+   preciso ensinar o conceito antes de cada etapa.
+4. **Depuração:** ao investigar um bug, isolar a causa antes de propor a
+   correção — não aplicar palpites.
+5. **Confirmar fontes/endpoints** (web) ANTES de passar código, pra evitar erro à toa.
+6. Registrar decisões e marcos (commits com boas mensagens, specs para mudanças
+   arquiteturais).
 
 ## 3. STACK
 Python · pandas · SQLAlchemy · yfinance · requests · feedparser · Streamlit ·

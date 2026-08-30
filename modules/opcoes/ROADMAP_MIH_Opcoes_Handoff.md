@@ -202,8 +202,14 @@ python -c "import sys; sys.path.insert(0,'modules/opcoes'); import db_opcoes; pr
 
 ## 8. Decisões em aberto (precisam do Francisco)
 
-- **Plano brapi:** ficar no gratuito (só PETR4) ou assinar Pro (todos os ativos + histórico completo)?
-- **Universo definitivo de ativos:** PETR4 + ITSA4 + investidas? (depende do Pro)
+- **Plano brapi:** ✅ decidido (2026-08-30) — fica no gratuito por agora (só
+  PETR4); reavaliar Pro conforme necessidade. Ver
+  `docs/superpowers/specs/2026-08-30-reposicionamento-e-hedge-carteira-design.md`.
+- **Universo definitivo de ativos:** ✅ resolvido de outra forma — em vez de
+  uma lista fixa, o universo agora é dinâmico (`ativos_da_carteira()` em
+  `coleta_opcoes.py`): cobre o que estiver na carteira do usuário, mais
+  `ATIVOS_PADRAO` como base. Ainda limitado pelo plano brapi gratuito (só
+  PETR4 tem dados reais hoje).
 - **Convenção de dias:** hoje corridos/365 aproximando 252; padronizar para dias úteis B3.
 - **Quando polir vs. expandir:** priorizar visual (abas) ou dados (mais ativos/histórico)?
 - **Governança:** fluxo de validação das sugestões antes de uso pela mesa.
