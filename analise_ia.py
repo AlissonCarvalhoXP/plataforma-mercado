@@ -49,11 +49,14 @@ CONTEXTO:
 
 PERGUNTA: {pergunta}
 """
-    try:
-        resposta = client.models.generate_content(model=MODELO, contents=prompt)
-        return resposta.text.strip()
-    except Exception:
-        return "Nao consegui responder agora (servidor ocupado). Tente de novo."
+    for tentativa in range(3):
+        try:
+            resposta = client.models.generate_content(model=MODELO, contents=prompt)
+            return resposta.text.strip()
+        except Exception:
+            print(f"Pergunta - tentativa {tentativa + 1} falhou. Esperando 5s...")
+            time.sleep(5)
+    return "Nao consegui responder agora (servidor ocupado). Tente de novo."
 
 
 def gerar_destaques(contexto):
