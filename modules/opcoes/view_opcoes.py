@@ -95,7 +95,7 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
 
             df = pd.DataFrame(rank)[["Codigo_Opcao", "Tipo", "Strike", "Dias",
                 "Preco_Mercado", "Justo_BS", "Desconto", "IV", "HV", "Diff_pp",
-                "Delta", "Sinal"]]
+                "Skew_pp", "Delta", "Sinal"]]
             st.dataframe(tabelas.destacar_ranking_opcoes(df), use_container_width=True, height=380)
             # IV x HV por strike
             calls = [l for l in rank if l["Tipo"] == "CALL"]

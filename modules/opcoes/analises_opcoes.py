@@ -74,6 +74,7 @@ class LinhaRanking:
     IV: float
     HV: float
     Diff_pp: float
+    Skew_pp: float
     Moneyness: str
     Delta: float
     Liquidez: int
@@ -92,16 +93,55 @@ DIAS_BASE = 252  # convenção BR (dias úteis) — decisão registrada no hando
 PRECO_MINIMO_RELEVANTE = 0.05
 
 
+def ajustar_sorriso(pontos: list[tuple[float, float]]):
+    """Ajusta uma parabola IV=f(Strike) por minimos quadrados aos pontos
+    (strike, iv) de um mesmo dia/Tipo, e devolve uma funcao strike->iv_esperada
+    pelo formato da cadeia (o "sorriso" de vol). None se houver menos de 4
+    strikes distintos - com 3 pontos a parabola tem 3 graus de liberdade pra
+    3 parametros e simplesmente interpola tudo, residuo sempre zero."""
+    strikes_distintos = sorted(set(k for k, _ in pontos))
+    if len(strikes_distintos) < 4:
+        return None
+    ks = np.array([k for k, _ in pontos])
+    ivs = np.array([v for _, v in pontos])
+    coefs = np.polyfit(ks, ivs, 2)
+    return lambda k: float(np.polyval(coefs, k))
+
+
+def calcular_score(diff_pp: float, skew_pp: float, liq: int,
+                    peso_diff: float = 0.6, peso_skew: float = 0.6,
+                    peso_liq: float = 0.05) -> float:
+    """Score do screener - positivo: vol parece barata (comprar); negativo:
+    vol parece cara (vender). Dois eixos ortogonais de verdade:
+    - diff_pp: gap entre IV e HV (vol atual vs. vol realizada)
+    - skew_pp: gap entre a IV desta opcao e a IV que o sorriso do dia (outros
+      strikes do mesmo vencimento) preveria pro seu strike
+
+    Deliberadamente NAO usa "desconto" (preco-espaco): e' uma reexpressao
+    nao-linear do mesmo gap que diff_pp ja mede - Black-Scholes e' monotonico
+    em volatilidade, entao desconto e diff sao colineares por construcao, nao
+    duas evidencias independentes. Achado real ao calibrar o backtest (o sweep
+    de peso nunca mudava o sinal de nenhuma linha). Ver
+    docs/superpowers/specs/2026-08-30-score-opcoes-sem-desconto-design.md."""
+    return -diff_pp * peso_diff - skew_pp * peso_skew + math.log1p(max(0, liq)) * peso_liq
+
+
 def analisar(underlying: dict, series: list[dict], selic: float,
-             peso_diff: float = 0.6, peso_liq: float = 0.05,
+             peso_diff: float = 0.6, peso_skew: float = 0.6, peso_liq: float = 0.05,
              liquidez_min: int = 0, hoje: date | None = None) -> list[dict]:
-    """Enriquece a cadeia lida do banco e devolve o ranking (lista de dicts)."""
+    """Enriquece a cadeia lida do banco e devolve o ranking (lista de dicts).
+
+    Duas passadas: a primeira calcula preco/IV/prazo de cada serie relevante e
+    agrupa (strike, iv) por Tipo pra ajustar o sorriso de vol do dia; a
+    segunda usa esse sorriso pra calcular o Skew_pp de cada linha e o Score
+    final (ver calcular_score)."""
     hoje = hoje or date.today()
     S = underlying["Spot"]
     HV = underlying["HV_60d"]
     r = selic
-    out: list[LinhaRanking] = []
 
+    calculados = []
+    pontos_por_tipo: dict[str, list[tuple[float, float]]] = {"CALL": [], "PUT": []}
     for s in series:
         venc = date.fromisoformat(s["Data_Vencimento"][:10])
         dias_corridos = max(1, (venc - hoje).days)
@@ -115,13 +155,26 @@ def analisar(underlying: dict, series: list[dict], selic: float,
 
         tipo = s["Tipo"]
         iv = s.get("IV_Fonte") or implied_vol(tipo, mkt, S, s["Strike"], T, r)
-        justo, delta = bs_price_delta(tipo, S, s["Strike"], T, r, HV)
-        desconto = (justo - mkt) / justo if justo > 0 else 0.0
-        diff = (iv - HV) * 100
         liq = (s.get("Volume") or 0) + (s.get("Open_Interest") or 0)
         if liq < liquidez_min:
             continue
-        score = desconto * 100 - diff * peso_diff + math.log1p(liq) * peso_liq
+
+        calculados.append((s, mkt, tipo, dias_corridos, T, iv, liq))
+        pontos_por_tipo.setdefault(tipo, []).append((s["Strike"], iv))
+
+    sorrisos = {tipo: ajustar_sorriso(pontos) for tipo, pontos in pontos_por_tipo.items()}
+
+    out: list[LinhaRanking] = []
+    for s, mkt, tipo, dias_corridos, T, iv, liq in calculados:
+        justo, delta = bs_price_delta(tipo, S, s["Strike"], T, r, HV)
+        desconto = (justo - mkt) / justo if justo > 0 else 0.0
+        diff = (iv - HV) * 100
+
+        sorriso = sorrisos.get(tipo)
+        iv_esperada = sorriso(s["Strike"]) if sorriso else None
+        skew = (iv - iv_esperada) * 100 if iv_esperada is not None else 0.0
+
+        score = calcular_score(diff, skew, liq, peso_diff, peso_skew, peso_liq)
         sinal = "COMPRAR_VOL" if score > 0 else "VENDER_VOL"
 
         out.append(LinhaRanking(
@@ -129,7 +182,8 @@ def analisar(underlying: dict, series: list[dict], selic: float,
             Data_Vencimento=s["Data_Vencimento"][:10], Dias=dias_corridos,
             Preco_Mercado=round(mkt, 2), Justo_BS=round(justo, 2),
             Desconto=round(desconto, 4), IV=round(iv, 4), HV=round(HV, 4),
-            Diff_pp=round(diff, 1), Moneyness=moneyness(tipo, S, s["Strike"]),
+            Diff_pp=round(diff, 1), Skew_pp=round(skew, 1),
+            Moneyness=moneyness(tipo, S, s["Strike"]),
             Delta=round(delta, 3), Liquidez=liq, Score=round(score, 2), Sinal=sinal,
         ))
 
@@ -246,7 +300,8 @@ def _texto_oportunidade(linha: dict, sinal: str) -> dict:
         f"{linha['Codigo_Opcao']} ({linha['Tipo']}, strike R$ {linha['Strike']:.2f}, "
         f"vence em {linha['Dias']} dias) — sinal de {direcao_txt} de volatilidade "
         f"({_texto_desconto(linha)}, "
-        f"IV {linha['Diff_pp']:+.1f}pp vs. HV, liquidez {linha['Liquidez']})."
+        f"IV {linha['Diff_pp']:+.1f}pp vs. HV, skew {linha['Skew_pp']:+.1f}pp vs. sorriso do dia, "
+        f"liquidez {linha['Liquidez']})."
     )
     return {
         "codigo_opcao": linha["Codigo_Opcao"], "tipo": linha["Tipo"],
@@ -326,16 +381,16 @@ if __name__ == "__main__":
     # Caso 7: destacar_oportunidades extrai a melhor compra e a melhor venda
     ranking_misto = [
         {"Codigo_Opcao": "PETRC300", "Tipo": "CALL", "Strike": 32.0, "Dias": 20,
-         "Justo_BS": 1.50, "Preco_Mercado": 1.27, "Desconto": 0.153, "Diff_pp": -3.2,
+         "Justo_BS": 1.50, "Preco_Mercado": 1.27, "Desconto": 0.153, "Diff_pp": -3.2, "Skew_pp": 0.0,
          "Liquidez": 1200, "Score": 15.3, "Sinal": "COMPRAR_VOL"},
         {"Codigo_Opcao": "PETRC310", "Tipo": "CALL", "Strike": 33.0, "Dias": 20,
-         "Justo_BS": 1.00, "Preco_Mercado": 0.95, "Desconto": 0.05, "Diff_pp": -1.0,
+         "Justo_BS": 1.00, "Preco_Mercado": 0.95, "Desconto": 0.05, "Diff_pp": -1.0, "Skew_pp": 0.0,
          "Liquidez": 800, "Score": 5.0, "Sinal": "COMPRAR_VOL"},
         {"Codigo_Opcao": "PETRP280", "Tipo": "PUT", "Strike": 28.0, "Dias": 20,
-         "Justo_BS": 0.50, "Preco_Mercado": 0.54, "Desconto": -0.08, "Diff_pp": 4.5,
+         "Justo_BS": 0.50, "Preco_Mercado": 0.54, "Desconto": -0.08, "Diff_pp": 4.5, "Skew_pp": 0.0,
          "Liquidez": 600, "Score": -12.0, "Sinal": "VENDER_VOL"},
         {"Codigo_Opcao": "PETRP290", "Tipo": "PUT", "Strike": 29.0, "Dias": 20,
-         "Justo_BS": 0.80, "Preco_Mercado": 0.82, "Desconto": -0.02, "Diff_pp": 1.0,
+         "Justo_BS": 0.80, "Preco_Mercado": 0.82, "Desconto": -0.02, "Diff_pp": 1.0, "Skew_pp": 0.0,
          "Liquidez": 900, "Score": -3.0, "Sinal": "VENDER_VOL"},
     ]
     dest = destacar_oportunidades(ranking_misto)
@@ -356,7 +411,7 @@ if __name__ == "__main__":
     # Caso 9: justo perto de zero -> desconto extremo vira texto legivel, nao percentual absurdo
     linha_justo_zero = {
         "Codigo_Opcao": "PETRU446W4", "Tipo": "PUT", "Strike": 44.61, "Dias": 26,
-        "Justo_BS": 0.01, "Preco_Mercado": 0.93, "Desconto": -91.0, "Diff_pp": 19.6,
+        "Justo_BS": 0.01, "Preco_Mercado": 0.93, "Desconto": -91.0, "Diff_pp": 19.6, "Skew_pp": 0.0,
         "Liquidez": 601, "Score": -50.0, "Sinal": "VENDER_VOL",
     }
     dest4 = destacar_oportunidades([linha_justo_zero])
@@ -380,5 +435,58 @@ if __name__ == "__main__":
     assert "TESTE_OK" in codigos
     assert "TESTE_RESIDUAL" not in codigos
     print("[OK] Caso 10: opcoes com preco abaixo de PRECO_MINIMO_RELEVANTE sao excluidas do ranking.")
+
+    # Caso 11: ajustar_sorriso exige >=4 strikes distintos (com 3, a parabola
+    # simplesmente interpola tudo e o residuo seria sempre zero)
+    pontos_ok = [(30.0, 0.35), (35.0, 0.30), (40.0, 0.28), (45.0, 0.32), (50.0, 0.40)]
+    sorriso = ajustar_sorriso(pontos_ok)
+    assert sorriso is not None
+    assert abs(sorriso(40.0) - 0.28) < 0.1
+    assert ajustar_sorriso([(30.0, 0.35), (35.0, 0.30), (40.0, 0.28)]) is None  # so 3 strikes
+    assert ajustar_sorriso([(30.0, 0.35), (30.0, 0.36)]) is None  # 1 strike so (repetido)
+    print("[OK] Caso 11: ajustar_sorriso exige >=4 strikes distintos, senao devolve None.")
+
+    # Caso 12: calcular_score combina diff e skew no mesmo sentido; liquidez desempata
+    s1 = calcular_score(diff_pp=-10.0, skew_pp=-5.0, liq=1000, peso_diff=0.6, peso_skew=0.6)
+    assert s1 > 0  # os dois sinais dizem "vol barata" -> comprar
+    s2 = calcular_score(diff_pp=10.0, skew_pp=5.0, liq=1000, peso_diff=0.6, peso_skew=0.6)
+    assert s2 < 0  # os dois dizem "vol cara" -> vender
+    s3 = calcular_score(diff_pp=0.0, skew_pp=0.0, liq=10000, peso_diff=0.6, peso_skew=0.6)
+    s4 = calcular_score(diff_pp=0.0, skew_pp=0.0, liq=100, peso_diff=0.6, peso_skew=0.6)
+    assert s3 > s4  # liquidez maior desempata pra cima
+    print("[OK] Caso 12: calcular_score combina diff e skew (mesmo sentido), liquidez desempata.")
+
+    # Caso 13: analisar() com menos de 4 strikes por Tipo -> Skew_pp = 0.0 (sem sorriso ajustavel)
+    series_poucas_strikes = [
+        {"Codigo_Opcao": "T1", "Tipo": "CALL", "Strike": 40.0,
+         "Data_Vencimento": "2026-09-15", "Ultimo": 1.50, "Bid": 0, "Ask": 0,
+         "Volume": 100, "Open_Interest": 100, "IV_Fonte": 0.30},
+        {"Codigo_Opcao": "T2", "Tipo": "CALL", "Strike": 42.0,
+         "Data_Vencimento": "2026-09-15", "Ultimo": 1.20, "Bid": 0, "Ask": 0,
+         "Volume": 100, "Open_Interest": 100, "IV_Fonte": 0.32},
+    ]
+    rank_poucas = analisar(underlying_teste, series_poucas_strikes, selic=0.14, hoje=date(2026, 8, 30))
+    assert all(l["Skew_pp"] == 0.0 for l in rank_poucas)
+    print("[OK] Caso 13: menos de 4 strikes -> Skew_pp = 0.0, sem sorriso ajustavel.")
+
+    # Caso 14: com 4+ strikes, uma opcao com IV destoante do sorriso do dia recebe Skew_pp != 0
+    series_com_sorriso = [
+        {"Codigo_Opcao": "S1", "Tipo": "CALL", "Strike": 35.0,
+         "Data_Vencimento": "2026-09-15", "Ultimo": 5.00, "Bid": 0, "Ask": 0,
+         "Volume": 100, "Open_Interest": 100, "IV_Fonte": 0.35},
+        {"Codigo_Opcao": "S2", "Tipo": "CALL", "Strike": 40.0,
+         "Data_Vencimento": "2026-09-15", "Ultimo": 1.50, "Bid": 0, "Ask": 0,
+         "Volume": 100, "Open_Interest": 100, "IV_Fonte": 0.15},  # destoante do sorriso
+        {"Codigo_Opcao": "S3", "Tipo": "CALL", "Strike": 45.0,
+         "Data_Vencimento": "2026-09-15", "Ultimo": 0.50, "Bid": 0, "Ask": 0,
+         "Volume": 100, "Open_Interest": 100, "IV_Fonte": 0.34},
+        {"Codigo_Opcao": "S4", "Tipo": "CALL", "Strike": 50.0,
+         "Data_Vencimento": "2026-09-15", "Ultimo": 0.20, "Bid": 0, "Ask": 0,
+         "Volume": 100, "Open_Interest": 100, "IV_Fonte": 0.38},
+    ]
+    rank_sorriso = analisar(underlying_teste, series_com_sorriso, selic=0.14, hoje=date(2026, 8, 30))
+    skew_s2 = next(l["Skew_pp"] for l in rank_sorriso if l["Codigo_Opcao"] == "S2")
+    assert skew_s2 != 0.0
+    print("[OK] Caso 14: opcao com IV destoante do sorriso do dia recebe Skew_pp != 0.")
 
     print("\nTodos os casos passaram.")

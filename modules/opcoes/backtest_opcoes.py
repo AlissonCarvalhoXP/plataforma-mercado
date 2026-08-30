@@ -1,37 +1,35 @@
 """Motor de backtest do screener de opções — varre VÁRIAS séries reais.
 
-Objetivo (pendência do handoff): calibrar o peso do Diff no score usando dados
-históricos reais (tabela opcoes_historico), em vez do 0,6 arbitrário.
+Objetivo (pendência do handoff): calibrar os pesos do Score usando dados
+históricos reais (tabela opcoes_historico), em vez de valores arbitrários.
 
 Lógica:
-  1. Para cada série e cada dia, calcula o score (desconto + assimetria IV-HV).
+  1. Para cada série e cada dia, calcula o score (gap IV×HV + skew do sorriso).
   2. O sinal (COMPRAR_VOL / VENDER_VOL) é uma aposta sobre o comportamento da
      opção nos próximos `horizonte` pregões.
   3. Confere se a aposta se confirmou (retorno da opção no horizonte).
-  4. Agrega win rate, retorno médio, expectativa — e faz um sweep de pesos.
+  4. Agrega win rate, retorno médio, expectativa — e faz um sweep 2D de pesos
+     (peso_diff × peso_skew).
 
 Sem dependência de rede: lê tudo de opcoes_historico já coletado.
+
+NOTA (2026-08-30): o score não usa mais "desconto" (preço-espaço) - só
+"diff" (IV vs. HV) e "skew" (IV desta opção vs. sorriso do dia, ajustado a
+partir de outras séries do mesmo dia/Tipo em opcoes_historico). Ver
+docs/superpowers/specs/2026-08-30-score-opcoes-sem-desconto-design.md para o
+raciocínio completo - o sweep de peso_diff sozinho nunca convergia porque
+desconto e diff são colineares por construção (Black-Scholes é monotônico em
+volatilidade).
 """
 from __future__ import annotations
 import os, sys, sqlite3, math
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 import numpy as np
-from scipy.stats import norm
 sys.path.insert(0, os.path.dirname(__file__))
 import db_opcoes
-from analises_opcoes import PRECO_MINIMO_RELEVANTE
-
-
-def _bs(tipo, S, K, T, r, sig):
-    """Preço Black-Scholes para reprecificar a opção com a HV (preço justo)."""
-    if T <= 0 or sig <= 0:
-        return max(S - K, 0) if tipo == "CALL" else max(K - S, 0)
-    d1 = (math.log(S / K) + (r + sig * sig / 2) * T) / (sig * math.sqrt(T))
-    d2 = d1 - sig * math.sqrt(T)
-    if tipo == "CALL":
-        return S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
-    return K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+from analises_opcoes import PRECO_MINIMO_RELEVANTE, ajustar_sorriso, calcular_score
 
 
 def _dias_ate(venc_str, data_str):
@@ -63,17 +61,24 @@ def _hv_movel(precos_ativo, i, janela=60):
     return float(np.std(r, ddof=1) * math.sqrt(252))
 
 
-# ---------------- score (mesma fórmula do screener) ----------------
-def score_linha(preco_opcao, preco_justo, iv, hv, liq, peso_diff, peso_liq=0.0):
-    desconto = (preco_justo - preco_opcao) / preco_justo if preco_justo > 0 else 0.0
-    diff = (iv - hv) * 100
-    return desconto * 100 - diff * peso_diff + math.log1p(max(0, liq)) * peso_liq
+def _construir_sorrisos_por_dia(hist: list[dict]):
+    """Agrupa o histórico por (Data, Tipo) e ajusta o sorriso (strike->iv) de
+    cada grupo com pontos suficientes - mesma função usada pelo screener ao
+    vivo (analises_opcoes.ajustar_sorriso), pra manter o backtest fiel ao que
+    roda em produção. Chave ausente/None = sem sorriso ajustável naquele
+    dia/tipo (poucos strikes negociando)."""
+    pontos = defaultdict(list)
+    for h in hist:
+        if h.get("IV") and h.get("Strike"):
+            pontos[(h["Data"], h.get("Tipo", "CALL"))].append((h["Strike"], h["IV"]))
+    return {chave: ajustar_sorriso(pts) for chave, pts in pontos.items()}
 
 
-# ---------------- backtest de um peso ----------------
+# ---------------- backtest de uma combinação de pesos ----------------
 @dataclass
 class Resultado:
     peso_diff: float
+    peso_skew: float
     n_sinais: int
     win_rate: float
     retorno_medio: float
@@ -82,13 +87,15 @@ class Resultado:
     retorno_sell: float
 
 
-def rodar_backtest(hist: list[dict], peso_diff: float,
-                   horizonte: int = 5, hv_janela: int = 60) -> Resultado:
-    """Roda o backtest para UM valor de peso_diff sobre todas as séries."""
-    from collections import defaultdict
+def rodar_backtest(hist: list[dict], peso_diff: float, peso_skew: float = 0.6,
+                    horizonte: int = 5, hv_janela: int = 60) -> Resultado:
+    """Roda o backtest para UMA combinação (peso_diff, peso_skew) sobre todas
+    as séries, usando a mesma calcular_score() do screener ao vivo."""
     por_serie = defaultdict(list)
     for h in hist:
         por_serie[h["Codigo_Opcao"]].append(h)
+
+    sorrisos = _construir_sorrisos_por_dia(hist)
 
     retornos, acertos = [], []
     ret_buy, ret_sell = [], []
@@ -104,18 +111,18 @@ def rodar_backtest(hist: list[dict], peso_diff: float,
             hv = _hv_movel(precos_ativo, i, hv_janela)
             if not hv or hv <= 0:
                 continue
-            # preço justo pela HV via Black-Scholes real (mesma escolha do screener)
             iv = p["IV"]
             po = p["Preco_Opcao"]
             if not po or po < PRECO_MINIMO_RELEVANTE:
                 continue  # residual de fim de vida - mesma guarda do screener (analisar())
-            S_now = p["Preco_Ativo"]
-            K = p.get("Strike") or S_now
-            r_now = p.get("Taxa_Livre_Risco") or 0.1415
-            T = _dias_ate(p.get("Data_Vencimento", ""), p["Data"]) / 365
-            preco_justo = _bs(p.get("Tipo", "CALL"), S_now, K, T, r_now, hv)
+
+            diff = (iv - hv) * 100
+            sorriso = sorrisos.get((p["Data"], p.get("Tipo", "CALL")))
+            strike = p.get("Strike")
+            skew = (iv - sorriso(strike)) * 100 if (sorriso and strike) else 0.0
+
             liq = 0  # histórico analytics não traz volume; peso_liq=0 aqui
-            s = score_linha(po, preco_justo, iv, hv, liq, peso_diff)
+            s = calcular_score(diff, skew, liq, peso_diff, peso_skew, peso_liq=0.0)
 
             # retorno futuro da OPÇÃO no horizonte
             fut = pts[i + horizonte]["Preco_Opcao"]
@@ -134,7 +141,7 @@ def rodar_backtest(hist: list[dict], peso_diff: float,
             acertos.append(1 if pnl > 0 else 0)
 
     if not retornos:
-        return Resultado(peso_diff, 0, 0, 0, 0, 0, 0)
+        return Resultado(peso_diff, peso_skew, 0, 0, 0, 0, 0, 0)
 
     wr = float(np.mean(acertos))
     rm = float(np.mean(retornos))
@@ -144,7 +151,7 @@ def rodar_backtest(hist: list[dict], peso_diff: float,
     exp = (wr * (np.mean(ganhos) if ganhos else 0)
            + (1 - wr) * (np.mean(perdas) if perdas else 0))
     return Resultado(
-        peso_diff=peso_diff, n_sinais=len(retornos), win_rate=round(wr, 4),
+        peso_diff=peso_diff, peso_skew=peso_skew, n_sinais=len(retornos), win_rate=round(wr, 4),
         retorno_medio=round(rm, 4), expectativa=round(float(exp), 4),
         retorno_buy=round(float(np.mean(ret_buy)) if ret_buy else 0, 4),
         retorno_sell=round(float(np.mean(ret_sell)) if ret_sell else 0, 4),
@@ -152,29 +159,34 @@ def rodar_backtest(hist: list[dict], peso_diff: float,
 
 
 # ---------------- sweep de pesos (calibração) ----------------
-def calibrar(ativo="PETR4", pesos=None, horizonte=5, db_path=None):
-    """Testa vários pesos e retorna o ranking por expectativa."""
+def calibrar(ativo="PETR4", pesos_diff=None, pesos_skew=None, horizonte=5, db_path=None):
+    """Testa uma grade (peso_diff × peso_skew) e devolve o ranking por
+    expectativa. Grade 2D porque agora são 2 eixos genuinamente independentes
+    a calibrar - o sweep antigo (só peso_diff) nunca convergia porque
+    desconto e diff eram colineares (ver módulo docstring)."""
     hist = carregar_historico(ativo, db_path)
     if not hist:
         return [], 0
-    pesos = pesos or [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
-    resultados = [rodar_backtest(hist, w, horizonte) for w in pesos]
+    pesos_diff = pesos_diff or [0.0, 0.3, 0.6, 1.0]
+    pesos_skew = pesos_skew or [0.0, 0.3, 0.6, 1.0]
+    resultados = [rodar_backtest(hist, wd, ws, horizonte)
+                  for wd in pesos_diff for ws in pesos_skew]
     resultados = [r for r in resultados if r.n_sinais > 0]
     resultados.sort(key=lambda r: r.expectativa, reverse=True)
     return resultados, len({h["Codigo_Opcao"] for h in hist})
 
 
 def imprimir(resultados, n_series):
-    print(f"\n{'='*72}\nCALIBRAÇÃO DO SCORE — {n_series} séries reais\n{'='*72}")
-    print(f"{'peso_diff':>10}{'n_sinais':>10}{'win_rate':>10}"
+    print(f"\n{'='*94}\nCALIBRAÇÃO DO SCORE — {n_series} séries reais\n{'='*94}")
+    print(f"{'peso_diff':>10}{'peso_skew':>11}{'n_sinais':>10}{'win_rate':>10}"
           f"{'ret_medio':>11}{'expectativa':>13}{'ret_buy':>9}{'ret_sell':>10}")
     for r in resultados:
-        print(f"{r.peso_diff:>10.1f}{r.n_sinais:>10}{r.win_rate:>9.1%}"
+        print(f"{r.peso_diff:>10.1f}{r.peso_skew:>11.1f}{r.n_sinais:>10}{r.win_rate:>9.1%}"
               f"{r.retorno_medio:>10.2%}{r.expectativa:>12.3%}"
               f"{r.retorno_buy:>8.1%}{r.retorno_sell:>9.1%}")
     if resultados:
         best = resultados[0]
-        print(f"\n>>> Melhor peso_diff = {best.peso_diff} "
+        print(f"\n>>> Melhor combinação: peso_diff={best.peso_diff}, peso_skew={best.peso_skew} "
               f"(expectativa {best.expectativa:.3%}, win rate {best.win_rate:.1%})")
 
 

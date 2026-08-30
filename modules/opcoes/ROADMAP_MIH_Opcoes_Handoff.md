@@ -115,34 +115,50 @@ Substituir o `peso_diff` fixo (0,6) em `analises_opcoes.py` pelo melhor valor en
 - **Robustez estatística:** 1 série cobre só a vida dela. Quanto mais séries/vencimentos, melhor.
   Ideal acumular vários vencimentos ao longo do tempo.
 
-### 🔴 4.4 PENDÊNCIA REAL (2026-08-30) — Score colinear, calibração não converge
+### ✅ 4.4 RESOLVIDO (2026-08-30) — Score colinear, calibração não convergia
 
 Rodei o backtest de verdade (63 séries, 51 sinais após filtrar residuais — ver 4.5) e o
-sweep de `peso_diff` (0,0 a 1,2) deu **resultado idêntico para todo peso testado**. Não é
-falta de dado: é que **`desconto` e `diff` não são sinais independentes**. Por construção
+sweep de `peso_diff` (0,0 a 1,2) deu **resultado idêntico para todo peso testado**. Não
+era falta de dado: **`desconto` e `diff` não são sinais independentes**. Por construção
 de Black-Scholes (monotônico em volatilidade), sempre que `IV < HV` (`diff` negativo), o
 preço justo calculado com `HV` fica maior que o preço de mercado (que reflete `IV`) quase
-por definição — ou seja, `desconto` positivo. Conferido nos dados reais: correlação quase
-perfeita entre os dois sinais (ex.: diff -34,6pp ↔ desconto +72,9%). Resultado: os dois
-termos do Score (`desconto*100 - diff*peso_diff`) empurram sempre pro mesmo lado, e
-`peso_diff` nunca muda o sinal `COMPRAR_VOL`/`VENDER_VOL` de nenhuma linha.
+por definição — ou seja, `desconto` positivo. Confirmado nos dados reais: correlação
+quase perfeita entre os dois sinais (ex.: diff -34,6pp ↔ desconto +72,9%). A entrada
+anterior desta seção ("bug metodológico já corrigido... manter assim") estava errada — a
+correção documentada só mudou a FORMA da colinearidade, não a removeu.
 
-**A entrada da seção 4.3 acima ("bug metodológico já corrigido... manter assim") estava
-errada** — a correção documentada (recalcular o justo via Black-Scholes com HV em vez da
-razão HV/IV) mudou a FORMA da colinearidade, não removeu ela. Isso precisa de um redesenho
-do Score (ex.: usar só um dos dois sinais; ou um sinal genuinamente ortogonal, tipo
-liquidez/microestrutura; ou aceitar que os dois medem a mesma coisa e simplificar), **não**
-um ajuste de peso. Não decidir isso sem consultar o Francisco — é escolha de metodologia
-quant, não bug de código.
+**Correção aplicada:** `desconto` sai do Score (vira campo só informativo). O Score
+passa a somar dois eixos genuinamente ortogonais: `Diff_pp` (IV vs. HV, já existia) e o
+novo `Skew_pp` (IV desta opção vs. o sorriso de vol do dia, ajustado a partir de outras
+séries do mesmo vencimento/Tipo — `ajustar_sorriso()`, exige ≥4 strikes distintos).
+Função `calcular_score()` compartilhada entre `analises_opcoes.py` e
+`backtest_opcoes.py` (antes o backtest tinha uma reimplementação própria da fórmula, o
+que já tinha permitido a divergência silenciosa registrada acima). Backtest agora varre
+uma grade 2D (`peso_diff` × `peso_skew`). Validado: o sweep passou a variar de verdade
+(win rate de 47,1% a 94,1% conforme a combinação, antes idêntico em todas). Detalhes
+completos: `docs/superpowers/specs/2026-08-30-score-opcoes-sem-desconto-design.md`.
 
-**Também pendente:** mesmo com o Score corrigido, a amostra ainda é pequena (13 de 63
-séries com ≥8 pontos válidos, todas PETR4, um único ativo) — insuficiente para confiança
-estatística. Acumular mais vencimentos/ativos antes de confiar em qualquer calibração.
+### 🔴 4.4b PENDÊNCIA REAL (2026-08-30) — Viés de theta-decay no backtest
+
+Ao validar a correção acima, a combinação "vencedora" do sweep (`peso_diff=0,
+peso_skew=0`) é um artefato: com os dois pesos zerados o Score fica exatamente 0,0 pra
+toda linha, `score > 0` nunca é verdadeiro, e **todo sinal cai em "VENDER_VOL" por
+padrão** — os "94,1% de acerto" capturam o decaimento médio de theta (opção perde valor
+com o tempo, "sempre vender" tende a acertar), não uma informação real do Diff/Skew.
+Viés clássico de backtest de opções. Precisa de correção antes de confiar em qualquer
+peso "vencedor" do sweep — ex.: comparar contra uma linha de base explícita "sempre
+vender" e só contar como sinal informativo o que supera essa base; ou excluir a banda de
+score ≈ 0 da contagem. Não corrigido nesta sessão — decisão de metodologia, não bug de
+código óbvio de consertar sozinho.
+
+**Também pendente:** mesmo com o Score corrigido, a amostra ainda é pequena (13-63
+séries, todas PETR4, um único ativo) — insuficiente para confiança estatística.
+Acumular mais vencimentos/ativos antes de confiar em qualquer calibração.
 
 **Avaliado e adiado:** motor de backtest mais robusto (Backtrader — viável, mas exercício/
 vencimento de opções não é nativo, teria que ser construído de qualquer forma; QuantConnect/
 LEAN — mais completo para opções, mas sem suporte nativo a B3, exigiria feed de dados
-customizado do zero a partir da brapi). Nenhum dos dois resolve a colinearidade do Score
+customizado do zero a partir da brapi). Nenhum dos dois resolve o viés de theta-decay
 nem o tamanho da amostra — não vale adotar antes de resolver os dois pontos acima.
 
 ### 4.5 Correção aplicada (2026-08-30) — piso de preço relevante
@@ -162,10 +178,13 @@ numérica em preços residuais) e reduziu pouco a amostra (53→51 sinais nos da
 ### Prioridade 1 — Backtest (detalhado na seção 4)
 - [x] Coletar histórico de vencimentos vencidos da PETR4 (63 séries coletadas até
       2026-08-30 — ainda pouco para confiança estatística, seguir acumulando)
-- [x] Rodar calibração — **bloqueada**: Score colinear, sweep de peso não converge
-      (ver seção 4.4, pendência real registrada)
-- [ ] Redesenhar o Score (decisão de metodologia, não de código — ver 4.4)
-- [ ] Só então: rodar calibração de novo e aplicar o peso em `analises_opcoes.py`
+- [x] Redesenhar o Score (`Skew_pp` no lugar de `Desconto` — ver 4.4, resolvido)
+- [x] Rodar calibração de novo — sweep passou a variar de verdade (não mais idêntico
+      pra todo peso), mas achou um viés novo de theta-decay (ver 4.4b, pendente)
+- [ ] Corrigir o viés de theta-decay no backtest (4.4b)
+- [ ] Acumular mais histórico/ativos (amostra ainda pequena)
+- [ ] Só então: aplicar o peso calibrado em `analises_opcoes.py` (hoje `peso_diff=0.6`,
+      `peso_skew=0.6` seguem arbitrários)
 
 ### Prioridade 2 — Automação da coleta
 - [ ] Adicionar a coleta de opções ao `atualizar.py` / `atualizar.bat` do MIH
