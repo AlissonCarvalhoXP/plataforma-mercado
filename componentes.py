@@ -6,6 +6,24 @@ nem import de streamlit.
 
 _BADGES = {"desfavoravel": "🔴", "favoravel": "🟢", "neutro": "⚪"}
 
+_CLASSES_DELTA_VALIDAS = {"positivo", "negativo", "neutro"}
+
+
+def kpi_card(label, valor_texto, delta_texto=None, sentido=None):
+    """Monta o HTML de um card de KPI no estilo Terminal Cartesiano. `sentido`
+    (quando informado) e' "positivo"/"negativo"/"neutro" - direcao do valor,
+    nao o vocabulario de exposicao.gerar_sinais_exposicao."""
+    delta_html = ""
+    if delta_texto is not None:
+        classe = sentido if sentido in _CLASSES_DELTA_VALIDAS else "neutro"
+        delta_html = f'<span class="kpi-delta {classe}">{delta_texto}</span>'
+    return (
+        f'<div class="kpi-card">'
+        f'<div class="kpi-label">{label}</div>'
+        f'<div class="kpi-value">{valor_texto}{delta_html}</div>'
+        f'</div>'
+    )
+
 
 def badge_sinal(sinal):
     """Formata um dict de sinal (do formato de exposicao.gerar_sinais_exposicao)
@@ -26,5 +44,21 @@ if __name__ == "__main__":
     sinal_neutro = {"sentido_impacto": "neutro", "texto": "Selic nao variou -> nao afeta R$ 2.000,00 em CDI (long)"}
     assert badge_sinal(sinal_neutro) == "⚪ Selic nao variou -> nao afeta R$ 2.000,00 em CDI (long)"
     print("[OK] Caso 3: badge_sinal formata sinal neutro.")
+
+    html_sem_delta = kpi_card("Selic", "14,00%")
+    assert html_sem_delta == '<div class="kpi-card"><div class="kpi-label">Selic</div><div class="kpi-value">14,00%</div></div>'
+    print("[OK] Caso 4: kpi_card sem delta.")
+
+    html_positivo = kpi_card("Selic", "14,00%", "▲ +0.25 p.p.", "positivo")
+    assert '<span class="kpi-delta positivo">▲ +0.25 p.p.</span>' in html_positivo
+    print("[OK] Caso 5: kpi_card com delta positivo.")
+
+    html_negativo = kpi_card("IPCA", "0,07%", "▼ -0.10 p.p.", "negativo")
+    assert 'kpi-delta negativo' in html_negativo
+    print("[OK] Caso 6: kpi_card com delta negativo.")
+
+    html_sentido_invalido = kpi_card("X", "1", "0", "sentido-desconhecido")
+    assert 'kpi-delta neutro' in html_sentido_invalido
+    print("[OK] Caso 7: sentido invalido cai em neutro.")
 
     print("\nTodos os casos passaram.")
