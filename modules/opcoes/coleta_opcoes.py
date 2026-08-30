@@ -11,17 +11,23 @@ Requer BRAPI_TOKEN no .env (PETR4 funciona no sandbox sem token).
 """
 from __future__ import annotations
 import os
+import re
 import sys
 import math
 from datetime import date
+from pathlib import Path
 
 # permite rodar tanto como módulo quanto script
 sys.path.insert(0, os.path.dirname(__file__))
 import db_opcoes
 
+# repo root, para "from carteira import ler_carteira" (universo dinamico da carteira)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 BASE = "https://brapi.dev/api"
 ATIVOS_PADRAO = ["PETR4"]          # amplie para ITSA4/investidas quando tiver plano Pro
 DIAS_ALVO = 35
+PADRAO_TICKER_B3 = re.compile(r"^[A-Z0-9]{4}\d{1,2}$")
 
 
 def _token() -> str | None:
@@ -109,10 +115,36 @@ def coletar_ativo(ativo: str, token: str | None, db_path=None) -> tuple[int, int
     return 1, n
 
 
+def _filtrar_tickers_b3(valores) -> list[str]:
+    """Filtra uma lista de valores (ex.: coluna 'ativo' da carteira) para os que
+    parecem tickers B3 (4 caracteres alfanuméricos + 1-2 dígitos, ex.: PETR4, ITUB4, B3SA3). Deduplica e
+    ordena. Ignora tudo que nao bate com o padrao (ex.: 'CDB Banco X', 'USD/BRL')."""
+    tickers = set()
+    for valor in valores:
+        ticker = str(valor).strip().upper()
+        if PADRAO_TICKER_B3.match(ticker):
+            tickers.add(ticker)
+    return sorted(tickers)
+
+
+def ativos_da_carteira() -> list[str]:
+    """Le a tabela carteira do MIH (via carteira.ler_carteira()) e devolve os
+    tickers B3 unicos reconhecidos. Nunca levanta excecao: banco indisponivel
+    ou carteira vazia devolvem lista vazia."""
+    try:
+        from carteira import ler_carteira
+        df = ler_carteira()
+    except Exception:
+        return []
+    if df is None or df.empty or "ativo" not in df.columns:
+        return []
+    return _filtrar_tickers_b3(df["ativo"].tolist())
+
+
 def main(ativos: list[str] | None = None):
     token = _token()
     db_opcoes.init_schema()
-    ativos = ativos or ATIVOS_PADRAO
+    ativos = ativos or sorted(set(ativos_da_carteira()) | set(ATIVOS_PADRAO))
     print(f"Coleta de opções — {len(ativos)} ativo(s) | token: {'sim' if token else 'sandbox'}")
     for a in ativos:
         try:
@@ -123,4 +155,12 @@ def main(ativos: list[str] | None = None):
 
 
 if __name__ == "__main__":
+    # Auto-teste rapido (o arquivo tambem e um CLI, entao nao ha bloco de teste
+    # separado como em exposicao.py/analises.py) - roda antes de coletar de verdade.
+    assert _filtrar_tickers_b3(
+        ["PETR4", "ITUB4", "CDB Banco X", "USD/BRL", "petr4", "B3SA3"]
+    ) == ["B3SA3", "ITUB4", "PETR4"]
+    assert _filtrar_tickers_b3([]) == []
+    print("[OK] _filtrar_tickers_b3 reconhece tickers B3 e ignora o resto, deduplicando.")
+
     main(sys.argv[1:] or None)
