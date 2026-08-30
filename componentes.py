@@ -32,6 +32,23 @@ def badge_sinal(sinal):
     return f"{marcador} {sinal['texto']}"
 
 
+_CLASSES_OPORTUNIDADE_VALIDAS = {"compra", "venda"}
+
+
+def card_oportunidade(titulo, texto, tipo):
+    """Monta o HTML de um card de oportunidade/recomendacao no estilo Terminal
+    Cartesiano (mesma familia visual do kpi_card). `tipo` e' "compra" ou
+    "venda" - a cor da borda e' definida no CSS do tema (tema.py), nao aqui;
+    qualquer outro valor cai numa borda neutra."""
+    classe = tipo if tipo in _CLASSES_OPORTUNIDADE_VALIDAS else "neutra"
+    return (
+        f'<div class="oportunidade-card {classe}">'
+        f'<div class="oportunidade-titulo">{titulo}</div>'
+        f'<div class="oportunidade-texto">{texto}</div>'
+        f'</div>'
+    )
+
+
 if __name__ == "__main__":
     sinal_fav = {"sentido_impacto": "favoravel", "texto": "Dólar variou +R$ 0,04 -> favorece R$ 1.000,00 em Dólar (long)"}
     assert badge_sinal(sinal_fav) == "🟢 Dólar variou +R$ 0,04 -> favorece R$ 1.000,00 em Dólar (long)"
@@ -60,5 +77,18 @@ if __name__ == "__main__":
     html_sentido_invalido = kpi_card("X", "1", "0", "sentido-desconhecido")
     assert 'kpi-delta neutro' in html_sentido_invalido
     print("[OK] Caso 7: sentido invalido cai em neutro.")
+
+    html_compra = card_oportunidade("Melhor compra de vol", "PETRC300 ...", "compra")
+    assert 'class="oportunidade-card compra"' in html_compra
+    assert "Melhor compra de vol" in html_compra and "PETRC300 ..." in html_compra
+    print("[OK] Caso 8: card_oportunidade com tipo compra.")
+
+    html_venda = card_oportunidade("Melhor venda de vol", "PETRP280 ...", "venda")
+    assert 'class="oportunidade-card venda"' in html_venda
+    print("[OK] Caso 9: card_oportunidade com tipo venda.")
+
+    html_neutro = card_oportunidade("X", "y", "tipo-desconhecido")
+    assert 'class="oportunidade-card neutra"' in html_neutro
+    print("[OK] Caso 10: tipo invalido cai em neutra.")
 
     print("\nTodos os casos passaram.")

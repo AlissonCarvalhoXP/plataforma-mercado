@@ -25,6 +25,8 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
     import db_opcoes
     import analises_opcoes as ao
     import coleta_opcoes as co
+    import componentes
+    import tema
 
     st.subheader("🎯 Opções B3 · Screener de Assimetria IV × HV")
     st.caption("Fonte: brapi.dev (EOD) · Preço justo via Black-Scholes · " + DISCLAIMER)
@@ -56,21 +58,45 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
 
     # KPIs
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Spot", f"R$ {und['Spot']:.2f}")
-    k2.metric("HV 60d", f"{und['HV_60d']:.1%}")
-    k3.metric("Séries", len(series))
-    k4.metric("Regime vol", regime)
-    k5.metric("Oportunidades", sum(1 for l in rank if abs(l["Diff_pp"]) >= 8))
+    k1.markdown(componentes.kpi_card("Spot", f"R$ {und['Spot']:.2f}"), unsafe_allow_html=True)
+    k2.markdown(componentes.kpi_card("HV 60d", f"{und['HV_60d']:.1%}"), unsafe_allow_html=True)
+    k3.markdown(componentes.kpi_card("Séries", str(len(series))), unsafe_allow_html=True)
+    k4.markdown(componentes.kpi_card("Regime vol", regime), unsafe_allow_html=True)
+    k5.markdown(componentes.kpi_card("Oportunidades", str(sum(1 for l in rank if abs(l["Diff_pp"]) >= 8))), unsafe_allow_html=True)
     st.caption(f"Taxa livre de risco (Selic): {selic:.2%} · Data ref.: {und['Data_Referencia']}")
+
+    # Top oportunidades - destaque da melhor compra e da melhor venda de vol
+    # do ranking ja calculado (nao substitui a tabela completa abaixo, so
+    # poupa o usuario de precisar achar a melhor linha sozinho).
+    st.markdown("**🎯 Top oportunidades**")
+    destaques = ao.destacar_oportunidades(rank)
+    oc1, oc2 = st.columns(2)
+    if destaques["compra"] is not None:
+        oc1.markdown(
+            componentes.card_oportunidade("Melhor compra de vol", destaques["compra"]["texto"], "compra"),
+            unsafe_allow_html=True,
+        )
+    else:
+        oc1.caption("Sem oportunidade de compra de vol no momento.")
+    if destaques["venda"] is not None:
+        oc2.markdown(
+            componentes.card_oportunidade("Melhor venda de vol", destaques["venda"]["texto"], "venda"),
+            unsafe_allow_html=True,
+        )
+    else:
+        oc2.caption("Sem oportunidade de venda de vol no momento.")
+    st.caption(DISCLAIMER)
 
     aba1, aba2, aba3 = st.tabs(["📊 Ranking", "⛓️ Cadeia", "🎯 Estratégias"])
 
     with aba1:
         if rank:
+            import tabelas
+
             df = pd.DataFrame(rank)[["Codigo_Opcao", "Tipo", "Strike", "Dias",
                 "Preco_Mercado", "Justo_BS", "Desconto", "IV", "HV", "Diff_pp",
                 "Delta", "Sinal"]]
-            st.dataframe(df, use_container_width=True, height=380)
+            st.dataframe(tabelas.destacar_ranking_opcoes(df), use_container_width=True, height=380)
             # IV x HV por strike
             calls = [l for l in rank if l["Tipo"] == "CALL"]
             if calls:
@@ -79,7 +105,7 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
                                          y=[c["IV"] for c in calls],
                                          mode="lines+markers", name="IV (calls)"))
                 fig.add_hline(y=und["HV_60d"], line_dash="dash", annotation_text="HV 60d")
-                fig.update_layout(title="IV × HV por strike", template="plotly_dark",
+                fig.update_layout(title="IV × HV por strike", template=tema.NOME_TEMPLATE_PLOTLY,
                                   height=320, xaxis_title="Strike", yaxis_title="Vol")
                 st.plotly_chart(fig, use_container_width=True)
 
@@ -132,6 +158,11 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
                             f"(regime `{regime_pos}` sem série OTM adequada)."
                         )
                     else:
-                        st.markdown(f"- {sugestao['texto']}")
+                        tipo_card = "venda" if "venda" in sugestao["tipo_estrutura"] else "compra"
+                        titulo_card = f"{sugestao['ativo']} — {sugestao['tipo_estrutura']}"
+                        st.markdown(
+                            componentes.card_oportunidade(titulo_card, sugestao["texto"], tipo_card),
+                            unsafe_allow_html=True,
+                        )
                 except Exception as exc:
                     st.warning(f"{ticker}: não foi possível calcular a sugestão de hedge ({exc}).")

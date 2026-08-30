@@ -58,6 +58,34 @@ def destacar_spread(df):
     return df.style.apply(_estilo_linha, axis=1).format(na_rep="")
 
 
+def _cor_fundo_sinal(sinal):
+    """Cor de fundo (com transparencia) para uma celula de Sinal do ranking de
+    opcoes. So COMPRAR_VOL ganha destaque - VENDER_VOL nao e' destaque
+    negativo, e' so outra estrategia (mesma convencao de componentes.
+    card_oportunidade, que usa 'accent', nao 'signal_neg', para venda de vol)."""
+    if sinal == "COMPRAR_VOL":
+        return f"background-color: {CORES['signal_pos']}33"
+    return ""
+
+
+def destacar_ranking_opcoes(df):
+    """Aplica _cor_fundo_sinal na coluna Sinal do ranking de opcoes (celula a
+    celula, nao a linha inteira - mesmo estilo de destacar_spread). Devolve um
+    pandas.Styler pronto para st.dataframe(...). Sem-op (Styler neutro) se a
+    coluna 'Sinal' nao existir."""
+    if "Sinal" not in df.columns:
+        return df.style
+
+    indice_sinal = df.columns.get_loc("Sinal")
+
+    def _estilo_linha(row):
+        estilos = [""] * len(df.columns)
+        estilos[indice_sinal] = _cor_fundo_sinal(row["Sinal"])
+        return estilos
+
+    return df.style.apply(_estilo_linha, axis=1)
+
+
 def colunas_dolar():
     """column_config para a tabela de dolar (pagina Macro)."""
     return {
@@ -125,6 +153,18 @@ if __name__ == "__main__":
     assert hasattr(styler, "to_html")
     styler.to_html()  # nao deve lancar excecao
     print("[OK] Caso 6: destacar_spread devolve um Styler valido.")
+
+    # Caso 6b: _cor_fundo_sinal - so COMPRAR_VOL ganha destaque
+    assert _cor_fundo_sinal("COMPRAR_VOL") == f"background-color: {CORES['signal_pos']}33"
+    assert _cor_fundo_sinal("VENDER_VOL") == ""
+    print("[OK] Caso 6b: _cor_fundo_sinal destaca so COMPRAR_VOL.")
+
+    # Caso 6c: destacar_ranking_opcoes devolve um Styler utilizavel, sem excecao
+    df_ranking_teste = pd.DataFrame({"Sinal": ["COMPRAR_VOL", "VENDER_VOL"], "Score": [5.0, -3.0]})
+    styler_opcoes = destacar_ranking_opcoes(df_ranking_teste)
+    assert hasattr(styler_opcoes, "to_html")
+    styler_opcoes.to_html()
+    print("[OK] Caso 6c: destacar_ranking_opcoes devolve um Styler valido.")
 
     # Caso 7: colunas_* devolvem dicts nao vazios de ColumnConfig
     assert len(colunas_dolar()) == 2

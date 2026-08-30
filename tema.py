@@ -142,6 +142,28 @@ CSS = f"""
     .kpi-delta.positivo {{ color: var(--signal-pos); }}
     .kpi-delta.negativo {{ color: var(--signal-neg); }}
     .kpi-delta.neutro {{ color: var(--muted); }}
+    .oportunidade-card {{
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--line);
+        border-radius: 8px;
+        padding: 0.85rem 1rem;
+        margin-bottom: 0.5rem;
+    }}
+    .oportunidade-card.compra {{ border-left-color: var(--signal-pos); }}
+    .oportunidade-card.venda {{ border-left-color: var(--accent); }}
+    .oportunidade-titulo {{
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 0.35rem;
+    }}
+    .oportunidade-texto {{
+        font-family: 'IBM Plex Sans', sans-serif;
+        font-size: 0.92rem;
+        color: var(--text);
+    }}
 </style>
 """
 
@@ -188,5 +210,8 @@ if __name__ == "__main__":
     assert CORES["bg"] in CSS
     assert "Space Grotesk" in CSS and "IBM Plex Mono" in CSS and "IBM Plex Sans" in CSS
     print("[OK] Caso 3: CSS referencia os tokens de cor e as 3 fontes da identidade.")
+
+    assert ".oportunidade-card" in CSS and ".oportunidade-card.compra" in CSS and ".oportunidade-card.venda" in CSS
+    print("[OK] Caso 4: CSS define as classes do card de oportunidade (compra/venda).")
 
     print("\nTodos os casos passaram.")

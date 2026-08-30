@@ -219,6 +219,50 @@ def sugerir_hedge(posicao: dict, ranking: list[dict], spot: float, regime: str) 
     }
 
 
+# ---------------- Oportunidades em destaque (Fase F — clareza do ranking) ----------------
+def _texto_desconto(linha: dict) -> str:
+    """Formata o desconto para exibicao. Quando o justo (Black-Scholes) e'
+    proximo de zero (opcao bem fora do dinheiro/perto do vencimento), a razao
+    (justo-mercado)/justo explode numericamente (ex.: -9000%) - nesses casos
+    mostra a diferenca em R$ em vez de um percentual sem sentido."""
+    desconto_pct = linha["Desconto"] * 100
+    if abs(desconto_pct) > 100:
+        diferenca = linha["Justo_BS"] - linha["Preco_Mercado"]
+        return f"desconto extremo (justo ~R$ {linha['Justo_BS']:.2f}, diferença R$ {diferenca:+.2f})"
+    return f"desconto {desconto_pct:+.1f}% sobre o justo"
+
+
+def _texto_oportunidade(linha: dict, sinal: str) -> dict:
+    direcao_txt = "COMPRA" if sinal == "COMPRAR_VOL" else "VENDA"
+    texto = (
+        f"{linha['Codigo_Opcao']} ({linha['Tipo']}, strike R$ {linha['Strike']:.2f}, "
+        f"vence em {linha['Dias']} dias) — sinal de {direcao_txt} de volatilidade "
+        f"({_texto_desconto(linha)}, "
+        f"IV {linha['Diff_pp']:+.1f}pp vs. HV, liquidez {linha['Liquidez']})."
+    )
+    return {
+        "codigo_opcao": linha["Codigo_Opcao"], "tipo": linha["Tipo"],
+        "sinal": sinal, "texto": texto,
+    }
+
+
+def destacar_oportunidades(ranking: list[dict]) -> dict:
+    """Extrai a melhor oportunidade de compra e de venda de volatilidade do
+    ranking ja calculado por analisar() (mesmos filtros de liquidez/peso ja
+    aplicados por quem chamou). Chave com valor None quando nao ha candidata
+    daquele lado (ex.: ranking vazio, ou so ha sinais de um lado)."""
+    compras = [linha for linha in ranking if linha["Sinal"] == "COMPRAR_VOL"]
+    vendas = [linha for linha in ranking if linha["Sinal"] == "VENDER_VOL"]
+
+    melhor_compra = max(compras, key=lambda linha: linha["Score"]) if compras else None
+    melhor_venda = min(vendas, key=lambda linha: linha["Score"]) if vendas else None
+
+    return {
+        "compra": _texto_oportunidade(melhor_compra, "COMPRAR_VOL") if melhor_compra else None,
+        "venda": _texto_oportunidade(melhor_venda, "VENDER_VOL") if melhor_venda else None,
+    }
+
+
 if __name__ == "__main__":
     ranking_exemplo = [
         {"Codigo_Opcao": "PETRC300", "Tipo": "CALL", "Strike": 32.0,
@@ -270,5 +314,47 @@ if __name__ == "__main__":
     # Caso 6: sem ranking disponivel -> None
     assert sugerir_hedge(posicao_long, [], spot, "ALTA") is None
     print("[OK] Caso 6: sem ranking disponível -> None.")
+
+    # Caso 7: destacar_oportunidades extrai a melhor compra e a melhor venda
+    ranking_misto = [
+        {"Codigo_Opcao": "PETRC300", "Tipo": "CALL", "Strike": 32.0, "Dias": 20,
+         "Justo_BS": 1.50, "Preco_Mercado": 1.27, "Desconto": 0.153, "Diff_pp": -3.2,
+         "Liquidez": 1200, "Score": 15.3, "Sinal": "COMPRAR_VOL"},
+        {"Codigo_Opcao": "PETRC310", "Tipo": "CALL", "Strike": 33.0, "Dias": 20,
+         "Justo_BS": 1.00, "Preco_Mercado": 0.95, "Desconto": 0.05, "Diff_pp": -1.0,
+         "Liquidez": 800, "Score": 5.0, "Sinal": "COMPRAR_VOL"},
+        {"Codigo_Opcao": "PETRP280", "Tipo": "PUT", "Strike": 28.0, "Dias": 20,
+         "Justo_BS": 0.50, "Preco_Mercado": 0.54, "Desconto": -0.08, "Diff_pp": 4.5,
+         "Liquidez": 600, "Score": -12.0, "Sinal": "VENDER_VOL"},
+        {"Codigo_Opcao": "PETRP290", "Tipo": "PUT", "Strike": 29.0, "Dias": 20,
+         "Justo_BS": 0.80, "Preco_Mercado": 0.82, "Desconto": -0.02, "Diff_pp": 1.0,
+         "Liquidez": 900, "Score": -3.0, "Sinal": "VENDER_VOL"},
+    ]
+    dest = destacar_oportunidades(ranking_misto)
+    assert dest["compra"]["codigo_opcao"] == "PETRC300"  # maior Score entre COMPRAR_VOL (15.3 > 5.0)
+    assert "COMPRA" in dest["compra"]["texto"]
+    assert dest["venda"]["codigo_opcao"] == "PETRP280"  # menor Score entre VENDER_VOL (-12.0 < -3.0)
+    assert "VENDA" in dest["venda"]["texto"]
+    print("[OK] Caso 7: destacar_oportunidades extrai a melhor compra e a melhor venda.")
+
+    # Caso 8: sem candidatas de um lado (ou ranking vazio) -> None, sem excecao
+    dest2 = destacar_oportunidades([ranking_misto[0]])
+    assert dest2["compra"] is not None
+    assert dest2["venda"] is None
+    dest3 = destacar_oportunidades([])
+    assert dest3["compra"] is None and dest3["venda"] is None
+    print("[OK] Caso 8: sem candidatas de um lado (ou ranking vazio) -> None, sem excecao.")
+
+    # Caso 9: justo perto de zero -> desconto extremo vira texto legivel, nao percentual absurdo
+    linha_justo_zero = {
+        "Codigo_Opcao": "PETRU446W4", "Tipo": "PUT", "Strike": 44.61, "Dias": 26,
+        "Justo_BS": 0.01, "Preco_Mercado": 0.93, "Desconto": -91.0, "Diff_pp": 19.6,
+        "Liquidez": 601, "Score": -50.0, "Sinal": "VENDER_VOL",
+    }
+    dest4 = destacar_oportunidades([linha_justo_zero])
+    assert "extremo" in dest4["venda"]["texto"]
+    assert "-9100" not in dest4["venda"]["texto"]  # nao mostra o percentual absurdo
+    assert "R$ 0.01" in dest4["venda"]["texto"]  # mostra o justo em R$ no lugar
+    print("[OK] Caso 9: justo perto de zero -> desconto extremo em R$, nao percentual absurdo.")
 
     print("\nTodos os casos passaram.")
