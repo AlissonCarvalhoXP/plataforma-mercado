@@ -5,5 +5,9 @@ streamlit
 requests
 feedparser
 google-genai
-python-dotenv 
-psycopg2-binary 
+python-dotenv
+psycopg2-binary
+openpyxl
+plotly
+numpy
+scipy
