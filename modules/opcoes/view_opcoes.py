@@ -114,21 +114,24 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
         else:
             for posicao in posicoes_acoes:
                 ticker = str(posicao["ativo"]).strip().upper()
-                posicao_norm = {**posicao, "ativo": ticker}
-                und_pos, series_pos = db_opcoes.read_latest_chain(ticker, db_path)
-                if not und_pos or not series_pos:
-                    st.warning(
-                        f"Sem dados de opções disponíveis para {ticker} "
-                        "(requer plano Pro da brapi)."
-                    )
-                    continue
-                rank_pos = ao.analisar(und_pos, series_pos, selic=selic)
-                regime_pos = ao.regime_volatilidade(series_pos, und_pos["HV_60d"])
-                sugestao = ao.sugerir_hedge(posicao_norm, rank_pos, und_pos["Spot"], regime_pos)
-                if sugestao is None:
-                    st.caption(
-                        f"{ticker}: sem sugestão de hedge no momento "
-                        f"(regime `{regime_pos}` sem série OTM adequada)."
-                    )
-                else:
-                    st.markdown(f"- {sugestao['texto']}")
+                try:
+                    posicao_norm = {**posicao, "ativo": ticker}
+                    und_pos, series_pos = db_opcoes.read_latest_chain(ticker, db_path)
+                    if not und_pos or not series_pos:
+                        st.warning(
+                            f"Sem dados de opções disponíveis para {ticker} "
+                            "(requer plano Pro da brapi)."
+                        )
+                        continue
+                    rank_pos = ao.analisar(und_pos, series_pos, selic=selic, liquidez_min=5000)
+                    regime_pos = ao.regime_volatilidade(series_pos, und_pos["HV_60d"])
+                    sugestao = ao.sugerir_hedge(posicao_norm, rank_pos, und_pos["Spot"], regime_pos)
+                    if sugestao is None:
+                        st.caption(
+                            f"{ticker}: sem sugestão de hedge no momento "
+                            f"(regime `{regime_pos}` sem série OTM adequada)."
+                        )
+                    else:
+                        st.markdown(f"- {sugestao['texto']}")
+                except Exception as exc:
+                    st.warning(f"{ticker}: não foi possível calcular a sugestão de hedge ({exc}).")

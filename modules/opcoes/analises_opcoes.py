@@ -171,7 +171,7 @@ def sugerir_hedge(posicao: dict, ranking: list[dict], spot: float, regime: str) 
 
     Nao substitui nem depende do screener/ranking generico (analisar()), que
     continua apontando oportunidades em qualquer ativo, com ou sem posicao."""
-    if not ranking or spot <= 0:
+    if not ranking or not spot or spot <= 0:
         return None
 
     direcao = str(posicao.get("direcao", "")).strip().lower()
@@ -186,7 +186,10 @@ def sugerir_hedge(posicao: dict, ranking: list[dict], spot: float, regime: str) 
                   if linha["Tipo"] == tipo_opcao and linha["Moneyness"] == "OTM"]
     if not candidatas:
         return None
-    melhor = max(candidatas, key=lambda linha: linha["Score"])
+    if lado == "vender":
+        melhor = min(candidatas, key=lambda linha: linha["Score"])
+    else:
+        melhor = max(candidatas, key=lambda linha: linha["Score"])
 
     tamanho = float(posicao.get("tamanho", 0) or 0)
     quantidade_acoes = tamanho / spot
@@ -234,7 +237,7 @@ if __name__ == "__main__":
     # Caso 1: long + ALTA -> venda coberta de CALL, melhor Score entre as CALLs OTM
     r = sugerir_hedge(posicao_long, ranking_exemplo, spot, "ALTA")
     assert r["tipo_estrutura"] == "venda coberta de CALL"
-    assert r["codigo_opcao_sugerida"] == "PETRC310"  # Score 8.0 > 5.0
+    assert r["codigo_opcao_sugerida"] == "PETRC300"  # vender -> pega o menor Score (5.0 < 8.0)
     assert r["contratos"] == 10  # 30000/30 = 1000 acoes / 100 = 10 contratos
     print("[OK] Caso 1: long + ALTA -> venda coberta de CALL, melhor Score, dimensionado.")
 
@@ -247,7 +250,7 @@ if __name__ == "__main__":
     # Caso 3: short + ALTA -> venda coberta de PUT
     r = sugerir_hedge(posicao_short, ranking_exemplo, spot, "ALTA")
     assert r["tipo_estrutura"] == "venda coberta de PUT"
-    assert r["codigo_opcao_sugerida"] == "PETRP290"
+    assert r["codigo_opcao_sugerida"] == "PETRP280"  # vender -> pega o menor Score (6.0 < 9.0)
     print("[OK] Caso 3: short + ALTA -> venda coberta de PUT.")
 
     # Caso 4: short + NEUTRA -> protecao via compra de CALL
