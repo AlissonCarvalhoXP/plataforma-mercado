@@ -114,17 +114,58 @@ Substituir o `peso_diff` fixo (0,6) em `analises_opcoes.py` pelo melhor valor en
   com `--max-series` e `--pausa` altos. O script tem retry/backoff e retomada.
 - **Robustez estatística:** 1 série cobre só a vida dela. Quanto mais séries/vencimentos, melhor.
   Ideal acumular vários vencimentos ao longo do tempo.
-- **Bug metodológico já corrigido:** o preço justo é recalculado via Black-Scholes real com HV
-  (não pela razão HV/IV, que tornava desconto e diff colineares). Manter assim.
+
+### 🔴 4.4 PENDÊNCIA REAL (2026-08-30) — Score colinear, calibração não converge
+
+Rodei o backtest de verdade (63 séries, 51 sinais após filtrar residuais — ver 4.5) e o
+sweep de `peso_diff` (0,0 a 1,2) deu **resultado idêntico para todo peso testado**. Não é
+falta de dado: é que **`desconto` e `diff` não são sinais independentes**. Por construção
+de Black-Scholes (monotônico em volatilidade), sempre que `IV < HV` (`diff` negativo), o
+preço justo calculado com `HV` fica maior que o preço de mercado (que reflete `IV`) quase
+por definição — ou seja, `desconto` positivo. Conferido nos dados reais: correlação quase
+perfeita entre os dois sinais (ex.: diff -34,6pp ↔ desconto +72,9%). Resultado: os dois
+termos do Score (`desconto*100 - diff*peso_diff`) empurram sempre pro mesmo lado, e
+`peso_diff` nunca muda o sinal `COMPRAR_VOL`/`VENDER_VOL` de nenhuma linha.
+
+**A entrada da seção 4.3 acima ("bug metodológico já corrigido... manter assim") estava
+errada** — a correção documentada (recalcular o justo via Black-Scholes com HV em vez da
+razão HV/IV) mudou a FORMA da colinearidade, não removeu ela. Isso precisa de um redesenho
+do Score (ex.: usar só um dos dois sinais; ou um sinal genuinamente ortogonal, tipo
+liquidez/microestrutura; ou aceitar que os dois medem a mesma coisa e simplificar), **não**
+um ajuste de peso. Não decidir isso sem consultar o Francisco — é escolha de metodologia
+quant, não bug de código.
+
+**Também pendente:** mesmo com o Score corrigido, a amostra ainda é pequena (13 de 63
+séries com ≥8 pontos válidos, todas PETR4, um único ativo) — insuficiente para confiança
+estatística. Acumular mais vencimentos/ativos antes de confiar em qualquer calibração.
+
+**Avaliado e adiado:** motor de backtest mais robusto (Backtrader — viável, mas exercício/
+vencimento de opções não é nativo, teria que ser construído de qualquer forma; QuantConnect/
+LEAN — mais completo para opções, mas sem suporte nativo a B3, exigiria feed de dados
+customizado do zero a partir da brapi). Nenhum dos dois resolve a colinearidade do Score
+nem o tamanho da amostra — não vale adotar antes de resolver os dois pontos acima.
+
+### 4.5 Correção aplicada (2026-08-30) — piso de preço relevante
+
+Opções negociando abaixo de `PRECO_MINIMO_RELEVANTE = 0.05` (residuais de fim de vida,
+quase sem valor) agora são excluídas do ranking (`analises_opcoes.py`) e do backtest
+(`backtest_opcoes.py`) — nesses casos o preço justo também fica perto de zero e
+`Desconto=(justo-mercado)/justo` explode numericamente (chegou a -9000%+ nos dados reais),
+dominando o Score por instabilidade numérica, não por sinal de mercado. Essa correção é
+independente da pendência 4.4 (colinearidade) — resolve um problema diferente (instabilidade
+numérica em preços residuais) e reduziu pouco a amostra (53→51 sinais nos dados atuais).
 
 ---
 
 ## 5. ROADMAP — próximos passos (em ordem sugerida)
 
 ### Prioridade 1 — Backtest (detalhado na seção 4)
-- [ ] Coletar histórico de 2–3 vencimentos vencidos da PETR4
-- [ ] Rodar calibração e definir o `peso_diff` ótimo
-- [ ] Aplicar o peso calibrado em `analises_opcoes.py`
+- [x] Coletar histórico de vencimentos vencidos da PETR4 (63 séries coletadas até
+      2026-08-30 — ainda pouco para confiança estatística, seguir acumulando)
+- [x] Rodar calibração — **bloqueada**: Score colinear, sweep de peso não converge
+      (ver seção 4.4, pendência real registrada)
+- [ ] Redesenhar o Score (decisão de metodologia, não de código — ver 4.4)
+- [ ] Só então: rodar calibração de novo e aplicar o peso em `analises_opcoes.py`
 
 ### Prioridade 2 — Automação da coleta
 - [ ] Adicionar a coleta de opções ao `atualizar.py` / `atualizar.bat` do MIH

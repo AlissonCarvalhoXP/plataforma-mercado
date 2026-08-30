@@ -83,6 +83,14 @@ class LinhaRanking:
 
 DIAS_BASE = 252  # convenção BR (dias úteis) — decisão registrada no handoff
 
+# Opções negociando abaixo disso (residuais de fim de vida, quase sem valor)
+# saem do ranking: o preço justo (Black-Scholes) também fica perto de zero
+# nesses casos, e Desconto=(justo-mercado)/justo explode numericamente
+# (ex.: -9000%), dominando o Score e tornando peso_diff irrelevante - achado
+# real ao calibrar o backtest com dados historicos. Sem intervalo de preco
+# relevante, uma tese de mispricing tambem nao importa economicamente aqui.
+PRECO_MINIMO_RELEVANTE = 0.05
+
 
 def analisar(underlying: dict, series: list[dict], selic: float,
              peso_diff: float = 0.6, peso_liq: float = 0.05,
@@ -102,7 +110,7 @@ def analisar(underlying: dict, series: list[dict], selic: float,
         mkt = s.get("Ultimo") or 0
         if not mkt and s.get("Bid") and s.get("Ask"):
             mkt = (s["Bid"] + s["Ask"]) / 2
-        if mkt <= 0:
+        if mkt < PRECO_MINIMO_RELEVANTE:
             continue
 
         tipo = s["Tipo"]
@@ -356,5 +364,21 @@ if __name__ == "__main__":
     assert "-9100" not in dest4["venda"]["texto"]  # nao mostra o percentual absurdo
     assert "R$ 0.01" in dest4["venda"]["texto"]  # mostra o justo em R$ no lugar
     print("[OK] Caso 9: justo perto de zero -> desconto extremo em R$, nao percentual absurdo.")
+
+    # Caso 10: opcoes quase sem valor (abaixo de PRECO_MINIMO_RELEVANTE) saem do ranking
+    underlying_teste = {"Spot": 40.0, "HV_60d": 0.30}
+    series_teste = [
+        {"Codigo_Opcao": "TESTE_OK", "Tipo": "CALL", "Strike": 40.0,
+         "Data_Vencimento": "2026-09-15", "Ultimo": 1.50, "Bid": 0, "Ask": 0,
+         "Volume": 100, "Open_Interest": 100, "IV_Fonte": None},
+        {"Codigo_Opcao": "TESTE_RESIDUAL", "Tipo": "CALL", "Strike": 60.0,
+         "Data_Vencimento": "2026-09-15", "Ultimo": 0.01, "Bid": 0, "Ask": 0,
+         "Volume": 50, "Open_Interest": 50, "IV_Fonte": None},
+    ]
+    rank_teste = analisar(underlying_teste, series_teste, selic=0.14, hoje=date(2026, 8, 30))
+    codigos = {l["Codigo_Opcao"] for l in rank_teste}
+    assert "TESTE_OK" in codigos
+    assert "TESTE_RESIDUAL" not in codigos
+    print("[OK] Caso 10: opcoes com preco abaixo de PRECO_MINIMO_RELEVANTE sao excluidas do ranking.")
 
     print("\nTodos os casos passaram.")

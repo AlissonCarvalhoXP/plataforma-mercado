@@ -20,6 +20,7 @@ import numpy as np
 from scipy.stats import norm
 sys.path.insert(0, os.path.dirname(__file__))
 import db_opcoes
+from analises_opcoes import PRECO_MINIMO_RELEVANTE
 
 
 def _bs(tipo, S, K, T, r, sig):
@@ -106,6 +107,8 @@ def rodar_backtest(hist: list[dict], peso_diff: float,
             # preço justo pela HV via Black-Scholes real (mesma escolha do screener)
             iv = p["IV"]
             po = p["Preco_Opcao"]
+            if not po or po < PRECO_MINIMO_RELEVANTE:
+                continue  # residual de fim de vida - mesma guarda do screener (analisar())
             S_now = p["Preco_Ativo"]
             K = p.get("Strike") or S_now
             r_now = p.get("Taxa_Livre_Risco") or 0.1415
