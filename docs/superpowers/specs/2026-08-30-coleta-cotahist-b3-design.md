@@ -49,15 +49,15 @@ coletores do módulo (`coleta_opcoes_historico.py`): script standalone com
    memória de uma vez — iterar o arquivo).
 4. Para cada linha com `TIPREG="01"`:
    - Se `CODBDI` ∈ {"78", "82"} → registro de opção (78=CALL, 82=PUT, via tabela
-     oficial anexa ao layout). Guardar temporariamente.
+     oficial anexa ao layout). Guardar temporariamente, junto com o **prefixo de 4
+     letras do `CODNEG`** (raiz do ticker, ex.: `"PETR"` de `"PETRA153"`).
    - Se `CODBDI="02"` e `TPMERC="010"` → registro de ação à vista (lote padrão).
-     Indexar por `(DATA_PREGAO, NOMRES)` → `PREULT` (preço de fechamento), mantendo o
-     de maior `VOLTOT` em caso de mais de um registro com o mesmo `NOMRES` no mesmo dia
-     (heurística: entre duas classes de ação do mesmo emissor, a mais líquida é a
-     candidata a ter opções ativas — ver risco na seção 6).
+     Indexar por `(DATA_PREGAO, raiz_de_4_letras_do_CODNEG)` → `(PREULT, VOLTOT)`,
+     mantendo o de maior `VOLTOT` em caso de mais de uma classe com a mesma raiz no
+     mesmo dia (ex.: ON e PN do mesmo emissor).
 5. Depois de indexar todo o arquivo: para cada registro de opção, buscar
-   `(DATA_PREGAO, NOMRES)` no índice de ações à vista. Sem correspondência → descarta a
-   linha (não inventa preço de ativo-objeto).
+   `(DATA_PREGAO, raiz_de_4_letras)` no índice de ações à vista. Sem correspondência →
+   descarta a linha (não inventa preço de ativo-objeto).
 6. Calcular IV via `analises_opcoes.implied_vol()` (Black-Scholes, já existe), usando a
    Selic mais próxima daquela data (`indicadores_bcb`) como taxa livre de risco.
 7. Gravar em `opcoes_historico` (schema estendido — seção 4.2), com
@@ -74,9 +74,9 @@ inclusive, conforme o documento oficial):
 | TIPREG | 1-2 | `"01"` fixo | filtrar linhas de dado (ignorar header/trailer) |
 | DATA_PREGAO | 3-10 | AAAAMMDD | `Data` |
 | CODBDI | 11-12 | texto | `78`=CALL, `82`=PUT, `02`=lote padrão (ação) |
-| CODNEG | 13-24 | texto | `Codigo_Opcao` (ou ticker da ação, pro índice) |
+| CODNEG | 13-24 | texto | `Codigo_Opcao` (ou ticker da ação, pro índice); os 4 primeiros caracteres = raiz do ticker, chave de casamento opção↔ação |
 | TPMERC | 25-27 | número | `070`=opção de compra, `080`=opção de venda, `010`=à vista |
-| NOMRES | 28-39 | texto | nome resumido do emissor — chave de casamento opção↔ação |
+| NOMRES | 28-39 | texto | nome do emissor — **não confiável para casar opção↔ação** (ver seção 6: verificado contra dado real, o `NOMRES` de registros de opção vem truncado/diferente do `NOMRES` limpo da ação, ex. `"PETR    /EDJ"` em vez de `"PETROBRAS"`) |
 | PREULT | 109-121 | `(11)V99` (2 casas implícitas, sem ponto) | preço de fechamento — `Preco_Opcao` ou `Preco_Ativo` conforme o registro |
 | PREOFC | 122-134 | `(11)V99` | melhor oferta de compra → `Bid` |
 | PREOFV | 135-147 | `(11)V99` | melhor oferta de venda → `Ask` |
@@ -120,21 +120,27 @@ iteração futura que calibre `peso_liq` de verdade com dado real de volume.
 - Execução idempotente: rodar de novo pro mesmo ano não duplica (`ON CONFLICT
   (Codigo_Opcao, Data) DO UPDATE`, mesma convenção de `coleta_opcoes_historico.py`).
 
-## 6. Verificação necessária ANTES de implementar o parser completo
+## 6. Verificação feita (2026-08-30, antes de escrever o parser completo)
 
-Dois pontos que o PDF documenta mas que precisam de confirmação contra um arquivo real
-(prática já estabelecida no projeto — "confirmar fontes antes de passar código"):
+Os dois pontos abaixo foram verificados contra o arquivo real de 2024 antes de
+implementar (prática já estabelecida no projeto — "confirmar fontes antes de passar
+código"), e mudaram o design original desta seção:
 
-1. **URL de download atual.** A B3 já mudou domínio/caminho desses arquivos no
-   passado; confirmar a URL vigente antes de escrever o downloader.
-2. **Casamento opção↔ação por NOMRES.** Verificar contra registros reais da PETR4 (e
-   idealmente mais um emissor com múltiplas classes, tipo Itaúsa/Itaú) se `NOMRES`
-   bate de forma inambígua entre o registro de opção e o de ação à vista no mesmo dia,
-   e se a heurística de "maior `VOLTOT` em caso de empate" resolve os casos de emissor
-   com ON e PN.
+1. **URL de download.** Confirmada: `https://bvmf.bmfbovespa.com.br/InstDados/SerHist/
+   COTAHIST_A{ANO}.ZIP` — testada via HTTP HEAD, `200 OK`, `COTAHIST_A2024.ZIP` (~79MB)
+   e `COTAHIST_A2025.ZIP` (~89MB) confirmados existentes e acessíveis sem token.
 
-Esses dois pontos são o primeiro passo do plano de implementação (spike de
-verificação), antes de escrever o parser completo.
+2. **Casamento opção↔ação — NOMRES não funciona, prefixo do ticker funciona.**
+   Verificado com dado real (PETR e ITUB, 14/06/2024): o campo `NOMRES` de um registro
+   de OPÇÃO vem truncado/corrompido (ex.: `"PETR    /EDJ"`, `"PETRE       "`) — não bate
+   com o `NOMRES` limpo (`"PETROBRAS"`) do registro de ação à vista. A abordagem da
+   seção 3 original (join por `NOMRES`) **não funcionaria** e foi substituída por:
+   casar pelos **4 primeiros caracteres do `CODNEG`** (raiz do ticker — `"PETR"` de
+   `"PETRA153"`, `"ITUB"` de `"ITUBB361"`), com **maior `VOLTOT` como desempate** quando
+   mais de uma classe do emissor compartilha a raiz. Verificado que a heurística de
+   desempate resolve o caso real de ambiguidade: em 14/06/2024, ITUB3 negociou
+   R$ 984 milhões contra R$ 48 **bilhões** de ITUB4 — a diferença de liquidez é grande o
+   suficiente pra nunca ser um empate ambíguo de verdade.
 
 ## 7. Teste
 
