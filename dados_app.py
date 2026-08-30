@@ -82,10 +82,29 @@ def normalizar_indicador(valor):
 
 def ultimo_valor(df_indicadores, nome):
     chave = normalizar_indicador(nome)
-    serie = df_indicadores[df_indicadores["indicador"].map(normalizar_indicador) == chave]
+    serie = df_indicadores[df_indicadores["indicador"].map(normalizar_indicador) == chave].sort_values("data")
     if serie.empty:
         return 0.0
     return float(serie["valor"].iloc[-1])
+
+
+def calcular_delta_indicador(df_indicadores, nome):
+    """Delta = ultima leitura - leitura imediatamente anterior DISTINTA, para
+    o indicador `nome`. None se houver menos de 2 leituras distintas (nunca
+    inventa um delta). Mesma regra de exposicao._calcular_deltas, generalizada
+    para qualquer indicador (usada pelos KPIs da pagina Macro)."""
+    if df_indicadores is None or df_indicadores.empty:
+        return None
+    chave = normalizar_indicador(nome)
+    serie = (
+        df_indicadores[df_indicadores["indicador"].map(normalizar_indicador) == chave]
+        .sort_values("data")
+        .drop_duplicates(subset="data", keep="last")
+    )
+    if len(serie) < 2:
+        return None
+    valores = serie["valor"].tolist()
+    return valores[-1] - valores[-2]
 
 
 if __name__ == "__main__":
@@ -102,5 +121,31 @@ if __name__ == "__main__":
     assert normalizar_indicador("IGP-M") == "igpm"
     assert normalizar_indicador(None) == ""
     print("[OK] Caso 2: normalizar_indicador remove acentuacao/pontuacao e trata None.")
+
+    df_selic_2_leituras = pd.DataFrame({
+        "indicador": ["Selic", "Selic"],
+        "data": pd.to_datetime(["2026-08-01", "2026-08-15"]),
+        "valor": [10.50, 10.75],
+    })
+    assert calcular_delta_indicador(df_selic_2_leituras, "Selic") == 0.25 or round(calcular_delta_indicador(df_selic_2_leituras, "Selic"), 2) == 0.25
+    print("[OK] Caso 3: calcular_delta_indicador acha a ultima leitura vs. a anterior.")
+
+    df_uma_leitura = pd.DataFrame({
+        "indicador": ["IPCA"],
+        "data": pd.to_datetime(["2026-08-01"]),
+        "valor": [0.30],
+    })
+    assert calcular_delta_indicador(df_uma_leitura, "IPCA") is None
+    assert calcular_delta_indicador(df_ind, "Selic") is not None  # df_ind (Caso 1) tem 2 leituras de Selic
+    print("[OK] Caso 4: calcular_delta_indicador devolve None com menos de 2 leituras.")
+
+    df_com_duplicata = pd.DataFrame({
+        "indicador": ["Selic", "Selic", "Selic"],
+        "data": pd.to_datetime(["2026-08-01", "2026-08-15", "2026-08-15"]),
+        "valor": [10.50, 10.75, 10.75],
+    })
+    delta_dup = calcular_delta_indicador(df_com_duplicata, "Selic")
+    assert round(delta_dup, 2) == 0.25  # 10.75 (15/08) - 10.50 (01/08), nao 10.75 - 10.75
+    print("[OK] Caso 5: linha duplicada na ultima data nao zera o delta (dedup por data aplicado).")
 
     print("\nTodos os casos passaram.")

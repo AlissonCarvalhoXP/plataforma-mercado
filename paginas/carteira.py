@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from dados_app import invalidar_cache_carteira
+from tabelas import colunas_carteira
 
 
 def pagina_carteira():
@@ -36,6 +37,7 @@ def pagina_carteira():
             hide_index=True,
             key="carteira_editor",
             num_rows="dynamic",
+            column_config=colunas_carteira(),
         )
 
         if st.button("Salvar carteira"):

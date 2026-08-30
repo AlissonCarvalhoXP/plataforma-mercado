@@ -115,6 +115,33 @@ CSS = f"""
         font-weight: 600;
         margin-top: 0.6rem;
     }}
+    .kpi-card {{
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 0.85rem 1rem;
+    }}
+    .kpi-label {{
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin-bottom: 0.35rem;
+    }}
+    .kpi-value {{
+        font-family: 'IBM Plex Mono', 'Consolas', monospace;
+        font-size: 1.5rem;
+        font-weight: 600;
+        color: var(--text);
+    }}
+    .kpi-delta {{
+        font-family: 'IBM Plex Mono', 'Consolas', monospace;
+        font-size: 0.85rem;
+        margin-left: 0.5rem;
+    }}
+    .kpi-delta.positivo {{ color: var(--signal-pos); }}
+    .kpi-delta.negativo {{ color: var(--signal-neg); }}
+    .kpi-delta.neutro {{ color: var(--muted); }}
 </style>
 """
 
