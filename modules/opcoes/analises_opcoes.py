@@ -52,6 +52,41 @@ def implied_vol(tipo, mkt, S, K, T, r):
     return round((lo + hi) / 2, 6)
 
 
+def implied_vol_lote(tipos, mkts, spots, strikes, prazos, taxas, iteracoes=60):
+    """Versao vetorizada (numpy) de implied_vol(), para calcular IV de muitas
+    opcoes de uma vez. A versao escalar (Newton-Raphson + bisseccao por
+    chamada) e' rapida o bastante pro screener ao vivo (dezenas de chamadas),
+    mas impraticavel em volume - medido: >24ms/chamada quando chamada em loop
+    (~13h estimadas para os ~2 milhoes de linhas de um backfill anual do
+    COTAHIST). Aqui: Newton-Raphson vetorizado com numero fixo de iteracoes,
+    sem bisseccao de fallback - aceita um pouco menos de robustez numerica
+    caso a caso em troca de ordens de magnitude de velocidade; adequado como
+    insumo de backtest estatistico em volume, nao como precificacao
+    individual de precisao (para isso, usar implied_vol())."""
+    tipos = np.asarray(tipos)
+    mkts = np.asarray(mkts, dtype=float)
+    spots = np.asarray(spots, dtype=float)
+    strikes = np.asarray(strikes, dtype=float)
+    prazos = np.maximum(np.asarray(prazos, dtype=float), 1e-6)
+    taxas = np.asarray(taxas, dtype=float)
+
+    is_call = tipos == "CALL"
+    sigma = np.full(mkts.shape, 0.30, dtype=float)
+
+    for _ in range(iteracoes):
+        raiz_t = np.sqrt(prazos)
+        d1 = (np.log(spots / strikes) + (taxas + sigma ** 2 / 2) * prazos) / (sigma * raiz_t)
+        d2 = d1 - sigma * raiz_t
+        preco_call = spots * norm.cdf(d1) - strikes * np.exp(-taxas * prazos) * norm.cdf(d2)
+        preco_put = strikes * np.exp(-taxas * prazos) * norm.cdf(-d2) - spots * norm.cdf(-d1)
+        preco = np.where(is_call, preco_call, preco_put)
+        vega = spots * norm.pdf(d1) * raiz_t
+        vega_seguro = np.where(vega > 1e-8, vega, 1e-8)
+        sigma = np.clip(sigma - (preco - mkts) / vega_seguro, 1e-4, 5.0)
+
+    return sigma
+
+
 def moneyness(tipo, S, K, band=0.05):
     if abs(S - K) / S <= band:
         return "ATM"
@@ -488,5 +523,31 @@ if __name__ == "__main__":
     skew_s2 = next(l["Skew_pp"] for l in rank_sorriso if l["Codigo_Opcao"] == "S2")
     assert skew_s2 != 0.0
     print("[OK] Caso 14: opcao com IV destoante do sorriso do dia recebe Skew_pp != 0.")
+
+    # Caso 15: implied_vol_lote (vetorizada) concorda com implied_vol (escalar)
+    # dentro de uma tolerancia pequena, para o mesmo conjunto de opcoes
+    tipos_lote = ["CALL", "PUT", "CALL", "PUT"]
+    mkts_lote = [2.23, 3.10, 0.85, 1.40]
+    spots_lote = [35.50, 35.50, 40.00, 40.00]
+    strikes_lote = [33.00, 38.00, 42.00, 39.00]
+    prazos_lote = [0.10, 0.25, 0.05, 0.40]
+    taxas_lote = [0.14, 0.14, 0.10, 0.10]
+    ivs_lote = implied_vol_lote(tipos_lote, mkts_lote, spots_lote, strikes_lote, prazos_lote, taxas_lote)
+    for i in range(len(tipos_lote)):
+        iv_escalar = implied_vol(tipos_lote[i], mkts_lote[i], spots_lote[i], strikes_lote[i], prazos_lote[i], taxas_lote[i])
+        assert abs(ivs_lote[i] - iv_escalar) < 0.01, f"item {i}: lote={ivs_lote[i]:.4f} escalar={iv_escalar:.4f}"
+    print("[OK] Caso 15: implied_vol_lote concorda com implied_vol escalar (tolerancia 0.01).")
+
+    # Caso 16: implied_vol_lote roda rapido em volume (a motivacao de existir)
+    import time
+    n_grande = 200_000
+    t0 = time.time()
+    implied_vol_lote(
+        ["CALL"] * n_grande, [2.0] * n_grande, [35.0] * n_grande,
+        [33.0] * n_grande, [0.2] * n_grande, [0.14] * n_grande,
+    )
+    dt = time.time() - t0
+    assert dt < 30.0, f"implied_vol_lote levou {dt:.1f}s para {n_grande} linhas - esperado < 30s"
+    print(f"[OK] Caso 16: implied_vol_lote calculou {n_grande} IVs em {dt:.2f}s (< 30s).")
 
     print("\nTodos os casos passaram.")
