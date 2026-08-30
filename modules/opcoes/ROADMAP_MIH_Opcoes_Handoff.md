@@ -138,22 +138,34 @@ uma grade 2D (`peso_diff` × `peso_skew`). Validado: o sweep passou a variar de 
 (win rate de 47,1% a 94,1% conforme a combinação, antes idêntico em todas). Detalhes
 completos: `docs/superpowers/specs/2026-08-30-score-opcoes-sem-desconto-design.md`.
 
-### 🔴 4.4b PENDÊNCIA REAL (2026-08-30) — Viés de theta-decay no backtest
+### ✅ 4.4b RESOLVIDO (2026-08-30) — Viés de theta-decay no backtest
 
-Ao validar a correção acima, a combinação "vencedora" do sweep (`peso_diff=0,
-peso_skew=0`) é um artefato: com os dois pesos zerados o Score fica exatamente 0,0 pra
-toda linha, `score > 0` nunca é verdadeiro, e **todo sinal cai em "VENDER_VOL" por
-padrão** — os "94,1% de acerto" capturam o decaimento médio de theta (opção perde valor
-com o tempo, "sempre vender" tende a acertar), não uma informação real do Diff/Skew.
-Viés clássico de backtest de opções. Precisa de correção antes de confiar em qualquer
-peso "vencedor" do sweep — ex.: comparar contra uma linha de base explícita "sempre
-vender" e só contar como sinal informativo o que supera essa base; ou excluir a banda de
-score ≈ 0 da contagem. Não corrigido nesta sessão — decisão de metodologia, não bug de
-código óbvio de consertar sozinho.
+Ao validar a correção 4.4, a combinação "vencedora" do sweep (`peso_diff=0,
+peso_skew=0`) era um artefato: com os dois pesos zerados o Score ficava exatamente 0,0
+pra toda linha, `score > 0` nunca era verdadeiro, e **todo sinal caía em "VENDER_VOL"
+por padrão** — os "94,1% de acerto" capturavam o decaimento médio de theta (opção perde
+valor com o tempo, "sempre vender" tende a acertar), não informação real do Diff/Skew.
+Viés clássico de backtest de opções.
 
-**Também pendente:** mesmo com o Score corrigido, a amostra ainda é pequena (13-63
-séries, todas PETR4, um único ativo) — insuficiente para confiança estatística.
-Acumular mais vencimentos/ativos antes de confiar em qualquer calibração.
+**Correção aplicada em `backtest_opcoes.py`:** (1) `score_minimo` (default `1e-6`)
+exclui pontos com `|score|` praticamente zero da contagem de sinais — não caem mais em
+"vender" por padrão, simplesmente não contam como sinal; (2) toda `Resultado` agora
+reporta `expectativa_base_vender` (o que "sempre vender" teria dado nos MESMOS pontos)
+e `edge` (`expectativa - expectativa_base_vender`) — `calibrar()` ranqueia por `edge`,
+não por expectativa bruta.
+
+**Resultado da validação:** com a correção, a combinação degenerada (0,0) sai do sweep
+(nenhum sinal sobra). E o achado real: **toda combinação testada hoje mostra edge
+negativo** (-63% a -79%) contra a base "sempre vender" — ou seja, com os dados atuais
+(63 séries, um único ativo, amostra pequena), nenhum peso testado demonstra vantagem
+real sobre simplesmente vender opções e deixar o theta trabalhar. Isso é a leitura
+honesta do que os dados atuais permitem concluir — não invalida o desenho do Score
+(Diff/Skew), só confirma que ainda não há evidência estatística de edge com o histórico
+disponível. Auto-teste sintético (sem depender de rede/banco) cobre os dois casos em
+`backtest_opcoes.py`.
+
+**Ainda pendente:** amostra pequena (13-63 séries, só PETR4) — nenhuma calibração deve
+ser aplicada em produção até acumular mais histórico e, idealmente, mais de um ativo.
 
 **Avaliado e adiado:** motor de backtest mais robusto (Backtrader — viável, mas exercício/
 vencimento de opções não é nativo, teria que ser construído de qualquer forma; QuantConnect/
@@ -180,9 +192,11 @@ numérica em preços residuais) e reduziu pouco a amostra (53→51 sinais nos da
       2026-08-30 — ainda pouco para confiança estatística, seguir acumulando)
 - [x] Redesenhar o Score (`Skew_pp` no lugar de `Desconto` — ver 4.4, resolvido)
 - [x] Rodar calibração de novo — sweep passou a variar de verdade (não mais idêntico
-      pra todo peso), mas achou um viés novo de theta-decay (ver 4.4b, pendente)
-- [ ] Corrigir o viés de theta-decay no backtest (4.4b)
-- [ ] Acumular mais histórico/ativos (amostra ainda pequena)
+      pra todo peso)
+- [x] Corrigir o viés de theta-decay no backtest (4.4b, resolvido) — achado: nenhuma
+      combinação testada hoje mostra edge real acima de "sempre vender"
+- [ ] Acumular mais histórico/ativos (amostra pequena demais pra confiar em qualquer
+      calibração ainda — nenhum edge positivo encontrado até agora)
 - [ ] Só então: aplicar o peso calibrado em `analises_opcoes.py` (hoje `peso_diff=0.6`,
       `peso_skew=0.6` seguem arbitrários)
 

@@ -82,17 +82,17 @@ A degenerescência sumiu: o sweep agora varia de verdade entre combinações de 
 94,1% conforme a combinação). Isso confirma que a correção resolveu o problema
 mecânico que motivou este design.
 
-**Achado adicional, não resolvido aqui:** a combinação "vencedora" do sweep
-(`peso_diff=0, peso_skew=0`) é um artefato trivial — com os dois pesos zerados, o Score
-fica exatamente 0,0 para toda linha (a única parcela restante é liquidez, sempre 0 no
-histórico), e `score > 0` nunca é verdadeiro, então **todo sinal cai em "VENDER_VOL"
-por padrão**. O resultado "94,1% de acerto" está capturando o decaimento médio de
-theta (opção perde valor com o tempo, então "sempre vender" tende a acertar), não uma
-informação real do Diff/Skew. Esse é um viés clássico de backtest de opções (apostar
-sempre contra o preço captura theta, não edge) e precisa ser tratado antes de confiar
-em qualquer peso "vencedor" — ex.: comparar contra uma linha de base "sempre vender"
-explícita, ou excluir a banda de score ≈ 0 da contagem de sinais. Registrado no roadmap
-do módulo como pendência separada (seção 4.4), não corrigido nesta sessão.
+**Achado adicional, corrigido em seguida (mesmo dia):** a combinação "vencedora" do
+sweep (`peso_diff=0, peso_skew=0`) era um artefato trivial — com os dois pesos
+zerados, o Score ficava exatamente 0,0 para toda linha, e `score > 0` nunca era
+verdadeiro, então todo sinal caía em "VENDER_VOL" por padrão. O "94,1% de acerto"
+capturava o decaimento médio de theta, não informação real do Diff/Skew. Corrigido com
+`score_minimo` (exclui pontos de score ~0 da contagem de sinais) e uma linha de base
+explícita "sempre vender" (`expectativa_base_vender`), com `edge = expectativa - base`
+como métrica de ranqueamento no lugar da expectativa bruta. Resultado honesto após a
+correção: **nenhuma combinação testada mostra edge positivo** (-63% a -79%) com os
+dados atuais — a amostra ainda é pequena demais pra concluir que Diff/Skew têm
+vantagem real. Ver seção 4.4b do roadmap do módulo.
 
 ## 4. Fora de escopo
 
@@ -101,6 +101,7 @@ do módulo como pendência separada (seção 4.4), não corrigido nesta sessão.
 - Term structure (comparar IV entre vencimentos diferentes) — exigiria coletar mais de
   um vencimento por vez (hoje `coleta_opcoes.py` foca só no vencimento mais próximo de
   35 dias).
-- Correção do viés de theta-decay no backtest (seção 3, achado adicional).
+- Aplicar qualquer peso calibrado em produção — nenhuma combinação testada mostrou
+  edge real ainda (seção 3); aguardar mais histórico/ativos.
 - GARCH real para a HV (já no roadmap do módulo) — melhoraria a qualidade do
   `Diff_pp`, mas é refinamento independente deste design.
