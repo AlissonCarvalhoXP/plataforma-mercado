@@ -199,9 +199,9 @@ def rodar_backtest(hist: list[dict], peso_diff: float, peso_skew: float = 0.6,
     if diffs.size == 0:
         return Resultado(peso_diff, peso_skew, 0, 0, 0, 0, 0, 0, 0, 0)
 
-    # Score vetorizado. Equivale a calcular_score(diff, skew, liq=0, peso_diff,
-    # peso_skew, peso_liq=0.0) - o termo de liquidez zera porque o historico
-    # analytics nao traz volume. O Caso 4 do auto-teste trava essa equivalencia,
+    # Score vetorizado. Equivale a calcular_score(diff, skew, peso_diff,
+    # peso_skew) - desde 2026-09-02 a formula nao tem mais termo de liquidez
+    # (era o que o backtest ja media). O Caso 4 do auto-teste trava a equivalencia,
     # pra divergir ruidosamente se calcular_score mudar de formula.
     scores = -diffs * peso_diff - skews * peso_skew
 
@@ -348,7 +348,7 @@ if __name__ == "__main__":
     # a medir silenciosamente outra coisa.
     for pd_, ps_ in ((0.3, 1.0), (0.6, 0.6), (1.0, 0.0)):
         for diff_, skew_ in ((12.5, -3.2), (-7.0, 4.4), (0.0, 0.0)):
-            esperado = calcular_score(diff_, skew_, 0, pd_, ps_, peso_liq=0.0)
+            esperado = calcular_score(diff_, skew_, pd_, ps_)
             vetorizado = (-np.array([diff_]) * pd_ - np.array([skew_]) * ps_).item()
             assert abs(esperado - vetorizado) < 1e-12, (pd_, ps_, diff_, skew_)
     print("[OK] Caso 4: score vetorizado == calcular_score() do screener ao vivo.")
