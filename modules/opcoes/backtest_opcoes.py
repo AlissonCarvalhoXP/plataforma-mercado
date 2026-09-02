@@ -58,11 +58,19 @@ def _dias_ate(venc_str, data_str):
 
 # ---------------- carga do histórico ----------------
 def carregar_historico(ativo="PETR4", db_path=None):
+    """ativo=None carrega TODOS os ativos de uma vez (pool completo) - é o
+    modo usado pela calibração real após o backfill COTAHIST, que cobre 188
+    ativos/238 mil séries em vez de só PETR4 (amostra pequena que motivou o
+    pipeline - ver docs/superpowers/specs/2026-08-30-coleta-cotahist-b3-design.md)."""
     con = sqlite3.connect(db_path or db_opcoes.DB_PATH)
     con.row_factory = sqlite3.Row
-    rows = con.execute(
-        "SELECT * FROM opcoes_historico WHERE Ativo_Objeto=? ORDER BY Codigo_Opcao, Data",
-        (ativo,)).fetchall()
+    if ativo is None:
+        rows = con.execute(
+            "SELECT * FROM opcoes_historico ORDER BY Codigo_Opcao, Data").fetchall()
+    else:
+        rows = con.execute(
+            "SELECT * FROM opcoes_historico WHERE Ativo_Objeto=? ORDER BY Codigo_Opcao, Data",
+            (ativo,)).fetchall()
     con.close()
     return [dict(r) for r in rows]
 
@@ -79,15 +87,23 @@ def _hv_movel(precos_ativo, i, janela=60):
 
 
 def _construir_sorrisos_por_dia(hist: list[dict]):
-    """Agrupa o histórico por (Data, Tipo) e ajusta o sorriso (strike->iv) de
-    cada grupo com pontos suficientes - mesma função usada pelo screener ao
-    vivo (analises_opcoes.ajustar_sorriso), pra manter o backtest fiel ao que
-    roda em produção. Chave ausente/None = sem sorriso ajustável naquele
-    dia/tipo (poucos strikes negociando)."""
+    """Agrupa o histórico por (Data, Tipo, Ativo_Objeto) e ajusta o sorriso
+    (strike->iv) de cada grupo com pontos suficientes - mesma função usada
+    pelo screener ao vivo (analises_opcoes.ajustar_sorriso), pra manter o
+    backtest fiel ao que roda em produção. Chave ausente/None = sem sorriso
+    ajustável naquele dia/tipo/ativo (poucos strikes negociando).
+
+    Ativo_Objeto ENTRA na chave (correção 2026-08-30): com o backtest rodando
+    sobre um único ativo (PETR4) isso era implícito e a chave (Data, Tipo)
+    bastava; ao pooling de 188 ativos (pipeline COTAHIST), omitir Ativo_Objeto
+    misturaria strikes de tickers com preços completamente diferentes (ex.
+    PETR4 ~R$35 e ITUB4 ~R$30, mas WEGE3 ~R$50) no mesmo ajuste - sorriso sem
+    sentido nenhum."""
     pontos = defaultdict(list)
     for h in hist:
         if h.get("IV") and h.get("Strike"):
-            pontos[(h["Data"], h.get("Tipo", "CALL"))].append((h["Strike"], h["IV"]))
+            chave = (h["Data"], h.get("Tipo", "CALL"), h.get("Ativo_Objeto"))
+            pontos[chave].append((h["Strike"], h["IV"]))
     return {chave: ajustar_sorriso(pts) for chave, pts in pontos.items()}
 
 
@@ -106,28 +122,35 @@ class Resultado:
     edge: float
 
 
-def rodar_backtest(hist: list[dict], peso_diff: float, peso_skew: float = 0.6,
-                    horizonte: int = 5, hv_janela: int = 60,
-                    score_minimo: float = 1e-6) -> Resultado:
-    """Roda o backtest para UMA combinação (peso_diff, peso_skew) sobre todas
-    as séries, usando a mesma calcular_score() do screener ao vivo.
+def preparar_pontos(hist: list[dict], horizonte: int = 5, hv_janela: int = 60):
+    """Calcula UMA vez tudo que NAO depende dos pesos: agrupamento por serie,
+    filtros, HV movel, diff, skew e o retorno futuro da opcao. Devolve tres
+    arrays numpy alinhados (diffs, skews, rets).
 
-    `score_minimo`: pontos com |score| <= score_minimo são excluídos da
-    contagem de sinais (nem comprar, nem vender) - sem isso, quando os pesos
-    zeram o score pra toda linha, tudo cairia em "vender" por padrão e o
-    resultado mediria só o decaimento médio de theta, não informação real
-    (ver nota do módulo sobre o viés de theta-decay)."""
+    Existe por desempenho: o sweep de calibracao repetia essa varredura de ~2,3
+    milhoes de pontos para CADA combinacao de pesos, sendo que so' o score
+    depende dos pesos. Recalcular HV/sorriso/filtros 16 vezes fazia o sweep
+    demorar mais que a vida util de uma sessao (5 execucoes interrompidas antes
+    de completar). Separando, a parte cara roda uma vez so'.
+
+    Serie e' identificada por (Codigo_Opcao, Data_Vencimento), NAO so'
+    Codigo_Opcao (correcao 2026-08-31): o codigo de opcao da B3 nao carrega o
+    ano - o mesmo ticker (ex. "ABCBA207") e' reciclado em ciclos de vencimento
+    diferentes (29.103 dos 238.918 codigos da base, 12,2%, tem mais de um
+    Data_Vencimento). Agrupar so' por Codigo_Opcao colava contratos
+    genuinamente diferentes na mesma serie, e o "retorno no horizonte"
+    comparava o preco de UM contrato com o de OUTRO - produzia retorno bruto
+    medio implausivel (+15,48% em 5 pregoes) e inflava o edge de ~4,6% para
+    ~14,8%."""
     por_serie = defaultdict(list)
     for h in hist:
-        por_serie[h["Codigo_Opcao"]].append(h)
+        por_serie[(h["Codigo_Opcao"], h["Data_Vencimento"])].append(h)
 
     sorrisos = _construir_sorrisos_por_dia(hist)
 
-    retornos, acertos = [], []
-    ret_buy, ret_sell = [], []
-    retornos_brutos = []  # ret_opcao de TODO ponto que gerou sinal, sem aplicar direcao - base "sempre vender"
+    diffs, skews, rets = [], [], []
 
-    for symbol, pts in por_serie.items():
+    for _chave, pts in por_serie.items():
         pts = [p for p in pts if p.get("Preco_Opcao") and p.get("IV")]
         if len(pts) < horizonte + 3:
             continue
@@ -143,54 +166,75 @@ def rodar_backtest(hist: list[dict], peso_diff: float, peso_skew: float = 0.6,
             if not po or po < PRECO_MINIMO_RELEVANTE:
                 continue  # residual de fim de vida - mesma guarda do screener (analisar())
 
-            diff = (iv - hv) * 100
-            sorriso = sorrisos.get((p["Data"], p.get("Tipo", "CALL")))
+            sorriso = sorrisos.get((p["Data"], p.get("Tipo", "CALL"), p.get("Ativo_Objeto")))
             strike = p.get("Strike")
-            skew = (iv - sorriso(strike)) * 100 if (sorriso and strike) else 0.0
+            fut = pts[i + horizonte]["Preco_Opcao"]  # retorno futuro da OPCAO no horizonte
 
-            liq = 0  # histórico analytics não traz volume; peso_liq=0 aqui
-            s = calcular_score(diff, skew, liq, peso_diff, peso_skew, peso_liq=0.0)
-            if abs(s) <= score_minimo:
-                continue  # sem sinal de verdade - nao conta nem como compra nem como venda
+            diffs.append((iv - hv) * 100)
+            skews.append((iv - sorriso(strike)) * 100 if (sorriso and strike) else 0.0)
+            rets.append((fut - po) / po if po > 0 else 0.0)
 
-            # retorno futuro da OPÇÃO no horizonte
-            fut = pts[i + horizonte]["Preco_Opcao"]
-            ret_opcao = (fut - po) / po if po > 0 else 0.0
-            retornos_brutos.append(ret_opcao)
+    return (np.asarray(diffs, dtype=float), np.asarray(skews, dtype=float),
+            np.asarray(rets, dtype=float))
 
-            # sinal: score>0 => COMPRAR vol (aposta que a opção sobe)
-            #        score<0 => VENDER vol  (aposta que a opção cai)
-            if s > 0:
-                pnl = ret_opcao          # comprado ganha se subir
-                ret_buy.append(pnl)
-            else:
-                pnl = -ret_opcao         # vendido ganha se cair
-                ret_sell.append(pnl)
 
-            retornos.append(pnl)
-            acertos.append(1 if pnl > 0 else 0)
+def rodar_backtest(hist: list[dict], peso_diff: float, peso_skew: float = 0.6,
+                    horizonte: int = 5, hv_janela: int = 60,
+                    score_minimo: float = 1e-6, pontos=None) -> Resultado:
+    """Roda o backtest para UMA combinacao (peso_diff, peso_skew), usando a
+    mesma formula de score do screener ao vivo.
 
-    if not retornos:
+    `pontos`: saida de preparar_pontos() reaproveitada entre combinacoes de
+    pesos (o sweep passa a mesma para as 16). None = calcula na hora.
+
+    `score_minimo`: pontos com |score| <= score_minimo sao excluidos da
+    contagem de sinais (nem comprar, nem vender) - sem isso, quando os pesos
+    zeram o score pra toda linha, tudo cairia em "vender" por padrao e o
+    resultado mediria so' o decaimento medio de theta, nao informacao real
+    (ver nota do modulo sobre o vies de theta-decay)."""
+    if pontos is None:
+        pontos = preparar_pontos(hist, horizonte, hv_janela)
+    diffs, skews, rets = pontos
+
+    if diffs.size == 0:
         return Resultado(peso_diff, peso_skew, 0, 0, 0, 0, 0, 0, 0, 0)
 
-    wr = float(np.mean(acertos))
-    rm = float(np.mean(retornos))
-    # expectativa = média ponderada (win*ganho_medio + loss*perda_media)
-    ganhos = [r for r in retornos if r > 0]
-    perdas = [r for r in retornos if r <= 0]
-    exp = (wr * (np.mean(ganhos) if ganhos else 0)
-           + (1 - wr) * (np.mean(perdas) if perdas else 0))
+    # Score vetorizado. Equivale a calcular_score(diff, skew, liq=0, peso_diff,
+    # peso_skew, peso_liq=0.0) - o termo de liquidez zera porque o historico
+    # analytics nao traz volume. O Caso 4 do auto-teste trava essa equivalencia,
+    # pra divergir ruidosamente se calcular_score mudar de formula.
+    scores = -diffs * peso_diff - skews * peso_skew
+
+    tem_sinal = np.abs(scores) > score_minimo
+    if not tem_sinal.any():
+        return Resultado(peso_diff, peso_skew, 0, 0, 0, 0, 0, 0, 0, 0)
+
+    s = scores[tem_sinal]
+    ret_opcao = rets[tem_sinal]
+
+    # sinal: score>0 => COMPRAR vol (aposta que a opcao sobe)
+    #        score<0 => VENDER vol  (aposta que a opcao cai)
+    comprado = s > 0
+    pnl = np.where(comprado, ret_opcao, -ret_opcao)
+
+    wr = float(np.mean(pnl > 0))
+    rm = float(np.mean(pnl))
+    # expectativa = media ponderada (win*ganho_medio + loss*perda_media)
+    ganhos = pnl[pnl > 0]
+    perdas = pnl[pnl <= 0]
+    exp = (wr * (float(np.mean(ganhos)) if ganhos.size else 0)
+           + (1 - wr) * (float(np.mean(perdas)) if perdas.size else 0))
 
     # linha de base: "sempre vender" nos MESMOS pontos que geraram sinal aqui -
     # isola o que e' decaimento medio de theta do que e' informacao real do score
-    exp_base_vender = -float(np.mean(retornos_brutos))
+    exp_base_vender = -float(np.mean(ret_opcao))
     edge = round(float(exp) - exp_base_vender, 4)
 
     return Resultado(
-        peso_diff=peso_diff, peso_skew=peso_skew, n_sinais=len(retornos), win_rate=round(wr, 4),
+        peso_diff=peso_diff, peso_skew=peso_skew, n_sinais=int(pnl.size), win_rate=round(wr, 4),
         retorno_medio=round(rm, 4), expectativa=round(float(exp), 4),
-        retorno_buy=round(float(np.mean(ret_buy)) if ret_buy else 0, 4),
-        retorno_sell=round(float(np.mean(ret_sell)) if ret_sell else 0, 4),
+        retorno_buy=round(float(np.mean(pnl[comprado])) if comprado.any() else 0, 4),
+        retorno_sell=round(float(np.mean(pnl[~comprado])) if (~comprado).any() else 0, 4),
         expectativa_base_vender=round(exp_base_vender, 4), edge=edge,
     )
 
@@ -206,10 +250,21 @@ def calibrar(ativo="PETR4", pesos_diff=None, pesos_skew=None, horizonte=5, db_pa
     hist = carregar_historico(ativo, db_path)
     if not hist:
         return [], 0
+    print(f"{len(hist)} linhas carregadas ({len({h['Codigo_Opcao'] for h in hist})} séries), "
+          f"iniciando sweep...", flush=True)
     pesos_diff = pesos_diff or [0.0, 0.3, 0.6, 1.0]
     pesos_skew = pesos_skew or [0.0, 0.3, 0.6, 1.0]
-    resultados = [rodar_backtest(hist, wd, ws, horizonte)
-                  for wd in pesos_diff for ws in pesos_skew]
+    combos = [(wd, ws) for wd in pesos_diff for ws in pesos_skew]
+    # A varredura cara (HV movel, sorrisos, filtros) nao depende dos pesos -
+    # roda uma vez so' e as 16 combinacoes apenas re-pontuam sobre os arrays.
+    pontos = preparar_pontos(hist, horizonte)
+    print(f"{len(pontos[0])} pontos preparados, pontuando {len(combos)} combinacoes...", flush=True)
+    resultados = []
+    for i, (wd, ws) in enumerate(combos, start=1):
+        r = rodar_backtest(hist, wd, ws, horizonte, pontos=pontos)
+        print(f"  [{i}/{len(combos)}] peso_diff={wd} peso_skew={ws} -> "
+              f"n_sinais={r.n_sinais} edge={r.edge:.3%}", flush=True)
+        resultados.append(r)
     resultados = [r for r in resultados if r.n_sinais > 0]
     resultados.sort(key=lambda r: r.edge, reverse=True)
     return resultados, len({h["Codigo_Opcao"] for h in hist})
@@ -264,9 +319,50 @@ if __name__ == "__main__":
     assert round(r_real.expectativa - r_real.expectativa_base_vender, 4) == r_real.edge
     print("[OK] Caso 2: com peso real, sinais aparecem e edge = expectativa - base_vender.")
 
+    # Caso 3: sorriso nao mistura ativos diferentes no mesmo (Data, Tipo) -
+    # regressao do bug corrigido ao pooling de multiplos ativos (COTAHIST).
+    # Dois "ativos" no mesmo dia com faixas de strike totalmente diferentes;
+    # se a chave nao incluir Ativo_Objeto, o ajuste combinado explode o fit.
+    hist_dois_ativos = [
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Strike": 10.0, "IV": 0.30},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Strike": 11.0, "IV": 0.28},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Strike": 12.0, "IV": 0.27},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Strike": 13.0, "IV": 0.29},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Strike": 100.0, "IV": 0.50},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Strike": 110.0, "IV": 0.55},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Strike": 120.0, "IV": 0.60},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Strike": 130.0, "IV": 0.65},
+    ]
+    sorrisos_teste = _construir_sorrisos_por_dia(hist_dois_ativos)
+    assert ("2026-01-05", "CALL", "AAAA") in sorrisos_teste
+    assert ("2026-01-05", "CALL", "BBBB") in sorrisos_teste
+    assert ("2026-01-05", "CALL") not in sorrisos_teste  # chave antiga (sem ativo) nao existe mais
+    iv_ajustada_aaaa = sorrisos_teste[("2026-01-05", "CALL", "AAAA")](11.5)
+    assert 0.20 < iv_ajustada_aaaa < 0.40  # continua na faixa de AAAA, nao contaminada por BBBB (~0.5-0.65)
+    print("[OK] Caso 3: sorriso agrupado por (Data, Tipo, Ativo_Objeto) - nao mistura ativos.")
+
+    # Caso 4: o score vetorizado de rodar_backtest tem que bater com o
+    # calcular_score() usado pelo screener ao vivo. Trava a otimizacao de
+    # desempenho (preparar_pontos + pontuacao vetorizada) na formula real -
+    # se calcular_score mudar, este teste quebra em vez de o backtest passar
+    # a medir silenciosamente outra coisa.
+    for pd_, ps_ in ((0.3, 1.0), (0.6, 0.6), (1.0, 0.0)):
+        for diff_, skew_ in ((12.5, -3.2), (-7.0, 4.4), (0.0, 0.0)):
+            esperado = calcular_score(diff_, skew_, 0, pd_, ps_, peso_liq=0.0)
+            vetorizado = (-np.array([diff_]) * pd_ - np.array([skew_]) * ps_).item()
+            assert abs(esperado - vetorizado) < 1e-12, (pd_, ps_, diff_, skew_)
+    print("[OK] Caso 4: score vetorizado == calcular_score() do screener ao vivo.")
+
     print("\nTodos os casos passaram.\n")
 
-    res, n = calibrar()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ativo", default=None,
+                     help="ativo unico (ex.: PETR4) para calibrar; omitido = pool de TODOS os "
+                          "ativos em opcoes_historico (uso pretendido apos o backfill COTAHIST)")
+    args, _ = ap.parse_known_args()
+
+    res, n = calibrar(ativo=args.ativo)
     if not res:
         print("Sem histórico. Rode coleta_opcoes_historico.py primeiro.")
     else:

@@ -245,13 +245,26 @@ def processar_ano(ano: int, db_path=None) -> None:
     casadas = casar_opcoes(linhas_parseadas, indice_vista)
     print(f"{len(casadas)} registros de opcao casados com o ativo-objeto.")
 
-    from db import engine
-    import pandas as pd
-    selic_df = pd.read_sql(
-        "SELECT data, valor FROM indicadores_bcb WHERE indicador = 'Selic'", engine)
+    # Selic vem do MESMO SQLite local de opcoes_historico (db_path ou
+    # db_opcoes.DB_PATH), nao do Postgres remoto (db.engine/DATABASE_URL).
+    # modules/opcoes/ e' deliberadamente isolado do banco remoto do app (ver
+    # db_opcoes.py) - usar o engine remoto aqui violava esse isolamento e foi
+    # a causa raiz de duas falhas reais num job de ~2 milhoes de linhas: um
+    # PendingRollbackError por conexao pooled expirada, e depois um socket
+    # preso em CloseWait travando o processo indefinidamente (conexao viva
+    # morrendo no meio de uma fase longa de CPU). Ler do arquivo local
+    # elimina a dependencia de rede desta etapa por completo. A Selic
+    # historica precisa estar previamente carregada nesse mesmo arquivo via
+    # `python coleta_bcb_historico.py --db-path <db_path>`.
+    con_selic = sqlite3.connect(db_path or db_opcoes.DB_PATH)
+    try:
+        linhas_selic = con_selic.execute(
+            "SELECT data, valor FROM indicadores_bcb WHERE indicador = 'Selic'").fetchall()
+    finally:
+        con_selic.close()
     selic_por_data = {
-        str(row["data"])[:10].replace("-", ""): float(row["valor"]) / 100
-        for _, row in selic_df.iterrows()
+        str(data)[:10].replace("-", ""): float(valor) / 100
+        for data, valor in linhas_selic
     }
     print(f"{len(selic_por_data)} leituras de Selic disponiveis para taxa livre de risco.")
 
@@ -279,10 +292,23 @@ def processar_ano(ano: int, db_path=None) -> None:
     ivs = ao.implied_vol_lote(tipos, mkts, spots, strikes, prazos, taxas)
     print(f"IV calculada em lote para {len(ivs)} registros.")
 
-    linhas_prontas = [
-        montar_linha_historico(opcao, selic, float(iv))
-        for (opcao, selic), iv in zip(com_selic, ivs)
-    ]
+    # Newton-Raphson vetorizado com iteracoes fixas nao converge quando vega
+    # e' proximo de zero (opcoes fundo ITM/OTM, vistas na pratica com
+    # moneyness medio ~0.54 vs ~0.11 nas IVs razoaveis) - o sigma so' fica
+    # preso no clip de implied_vol_lote (piso 1e-4 ou teto 5.0), nao e' uma
+    # IV real. Medido em 2024: ~11.2% das linhas (10.8% no piso + 0.35% no
+    # teto) - descartadas aqui pra nao poluir o backtest/Score com sinal
+    # falso. Ver docs/superpowers/plans/2026-08-30-coleta-cotahist-b3.md.
+    PISO_IV, TETO_IV = 1e-4, 5.0
+    linhas_prontas = []
+    n_descartadas_iv = 0
+    for (opcao, selic), iv in zip(com_selic, ivs):
+        iv = float(iv)
+        if iv <= PISO_IV * 1.001 or iv >= TETO_IV * 0.9998:
+            n_descartadas_iv += 1
+            continue
+        linhas_prontas.append(montar_linha_historico(opcao, selic, iv))
+    print(f"{n_descartadas_iv} registros descartados (IV presa no piso/teto do solver, nao convergiu).")
 
     total_gravado = gravar_historico(linhas_prontas, db_path)
     print(f"{total_gravado} linhas gravadas em opcoes_historico (Fonte='b3_cotahist').")
