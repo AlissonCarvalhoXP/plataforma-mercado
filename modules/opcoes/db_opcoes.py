@@ -126,6 +126,77 @@ def read_latest_chain(ativo: str, db_path: str | Path | None = None):
     return (dict(und) if und else None), [dict(s) for s in series]
 
 
+def init_schema_cenarios(db_path: str | Path | None = None) -> None:
+    """Tabela de cenarios declarados pelo usuario (idempotente e aditivo).
+
+    Data_Declaracao e' o que torna a afericao posterior possivel: com o tempo,
+    da' pra medir se os cenarios do usuario acertam mais que o preco implicito.
+    Isso e' genuinamente calibravel, ao contrario do Score (ver secao 4.4c do
+    ROADMAP_MIH_Opcoes_Handoff.md)."""
+    con = _conn(db_path)
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS opcoes_cenarios (
+                Ativo TEXT NOT NULL,
+                Data_Declaracao TEXT NOT NULL,
+                Data_Vencimento TEXT NOT NULL,
+                Cenario TEXT NOT NULL CHECK(Cenario IN ('alta','base','baixa')),
+                Preco_Alvo REAL NOT NULL,
+                Probabilidade REAL NOT NULL,
+                Premissa TEXT,
+                PRIMARY KEY (Ativo, Data_Declaracao, Data_Vencimento, Cenario)
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def gravar_cenario(ativo: str, data_declaracao: str, vencimento: str,
+                    cenario: str, preco_alvo: float, probabilidade: float,
+                    premissa: str, db_path: str | Path | None = None) -> None:
+    """Idempotente: regravar o mesmo (ativo, data, vencimento, cenario)
+    atualiza os valores em vez de duplicar a linha."""
+    con = _conn(db_path)
+    try:
+        con.execute("""
+            INSERT INTO opcoes_cenarios
+                (Ativo, Data_Declaracao, Data_Vencimento, Cenario,
+                 Preco_Alvo, Probabilidade, Premissa)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(Ativo, Data_Declaracao, Data_Vencimento, Cenario)
+            DO UPDATE SET Preco_Alvo=excluded.Preco_Alvo,
+                          Probabilidade=excluded.Probabilidade,
+                          Premissa=excluded.Premissa
+        """, (ativo, data_declaracao, vencimento, cenario,
+              preco_alvo, probabilidade, premissa))
+        con.commit()
+    finally:
+        con.close()
+
+
+def ler_cenarios(ativo: str, vencimento: str,
+                  db_path: str | Path | None = None) -> list[dict]:
+    """Cenarios da declaracao MAIS RECENTE para o par (ativo, vencimento).
+
+    Declaracoes antigas ficam na tabela de proposito - sao o registro do que o
+    usuario pensava naquela data, base da afericao futura."""
+    con = _conn(db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        linhas = con.execute("""
+            SELECT * FROM opcoes_cenarios
+            WHERE Ativo = ? AND Data_Vencimento = ?
+              AND Data_Declaracao = (
+                  SELECT MAX(Data_Declaracao) FROM opcoes_cenarios
+                  WHERE Ativo = ? AND Data_Vencimento = ?)
+            ORDER BY Cenario
+        """, (ativo, vencimento, ativo, vencimento)).fetchall()
+        return [dict(linha) for linha in linhas]
+    finally:
+        con.close()
+
+
 def list_existing_tables(db_path: str | Path | None = None) -> list[str]:
     """Diagnóstico: lista todas as tabelas do banco (prova de que nada foi apagado)."""
     con = _conn(db_path)
@@ -133,3 +204,34 @@ def list_existing_tables(db_path: str | Path | None = None) -> list[str]:
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
     con.close()
     return [r[0] for r in rows]
+
+
+if __name__ == "__main__":
+    import tempfile, os as _os
+
+    with tempfile.TemporaryDirectory() as tmp:
+        banco = _os.path.join(tmp, "teste_cenarios.db")
+        init_schema_cenarios(banco)
+
+        gravar_cenario("PETR4", "2026-09-02", "2026-10-16", "alta",
+                       42.0, 0.25, "Selic cai, Brent > 80", banco)
+        gravar_cenario("PETR4", "2026-09-02", "2026-10-16", "base",
+                       35.0, 0.55, "cenario atual se mantem", banco)
+        lidos = ler_cenarios("PETR4", "2026-10-16", banco)
+        assert len(lidos) == 2
+        assert {linha["Cenario"] for linha in lidos} == {"alta", "base"}
+        alta = [linha for linha in lidos if linha["Cenario"] == "alta"][0]
+        assert alta["Preco_Alvo"] == 42.0 and alta["Probabilidade"] == 0.25
+        assert alta["Premissa"] == "Selic cai, Brent > 80"
+        print("[OK] Caso 1: cenario gravado e lido com premissa preservada.")
+
+        # regravar o mesmo (ativo, data, vencimento, cenario) atualiza, nao duplica
+        gravar_cenario("PETR4", "2026-09-02", "2026-10-16", "alta",
+                       44.0, 0.30, "revisado", banco)
+        lidos2 = ler_cenarios("PETR4", "2026-10-16", banco)
+        assert len(lidos2) == 2
+        alta2 = [linha for linha in lidos2 if linha["Cenario"] == "alta"][0]
+        assert alta2["Preco_Alvo"] == 44.0 and alta2["Premissa"] == "revisado"
+        print("[OK] Caso 2: regravar o mesmo cenario atualiza em vez de duplicar.")
+
+    print("\nTodos os casos passaram.")
