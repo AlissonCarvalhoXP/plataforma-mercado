@@ -113,6 +113,53 @@ def perfil_risco(pernas: list[Perna], lote: int = LOTE_PADRAO_B3) -> PerfilRisco
     )
 
 
+def escada_strikes(cadeia: list[dict], tipo: str, vencimento: str) -> list[float]:
+    """Strikes distintos e ordenados que realmente existem na cadeia para
+    aquele tipo e vencimento."""
+    return sorted({
+        float(linha["Strike"]) for linha in cadeia
+        if linha.get("Tipo") == tipo
+        and str(linha.get("Data_Vencimento", ""))[:10] == vencimento[:10]
+    })
+
+
+def selecionar_strike(escada: list[float], spot: float, seletor: str,
+                       tipo: str) -> float | None:
+    """Indexa a escada de strikes REAL, em vez de selecionar por delta.
+
+    Delta dependeria de qual volatilidade alimenta o modelo; indice sobre a
+    cadeia listada e' verificavel por inspecao e nao carrega premissa nenhuma.
+
+    ATM = strike mais proximo do spot. OTM anda no sentido de "sem valor
+    intrinseco" (pra cima em CALL, pra baixo em PUT); ITM no sentido oposto.
+    Devolve None quando o degrau pedido nao existe na cadeia."""
+    if not escada:
+        return None
+    atm = min(escada, key=lambda k: abs(k - spot))
+    indice_atm = escada.index(atm)
+
+    if seletor == "ATM":
+        return atm
+    if len(seletor) < 4:
+        return None
+    direcao_texto, passo_texto = seletor[:3], seletor[3:]
+    if not passo_texto.isdigit():
+        return None
+    passo = int(passo_texto)
+
+    if direcao_texto == "OTM":
+        deslocamento = passo if tipo == "CALL" else -passo
+    elif direcao_texto == "ITM":
+        deslocamento = -passo if tipo == "CALL" else passo
+    else:
+        return None
+
+    indice = indice_atm + deslocamento
+    if 0 <= indice < len(escada):
+        return escada[indice]
+    return None
+
+
 if __name__ == "__main__":
     # Trava de alta: compra CALL 30 por R$2,00, vende CALL 35 por R$0,50.
     # Debito liquido de R$1,50 por acao.
@@ -177,5 +224,33 @@ if __name__ == "__main__":
     assert p_bor.perda_maxima == -50.0          # debito liquido: 3 - 3 + 0,5 = 0,50
     assert p_bor.ganho_maximo == 450.0          # (35-30-0,50) * 100
     print("[OK] Caso 6: borboleta tem perda e ganho ambos limitados.")
+
+    # Caso 7: escada de strikes sai ordenada, sem repetir, filtrada por
+    # tipo e vencimento
+    cadeia_teste = [
+        {"Tipo": "CALL", "Strike": 32.0, "Data_Vencimento": "2026-02-20"},
+        {"Tipo": "CALL", "Strike": 30.0, "Data_Vencimento": "2026-02-20"},
+        {"Tipo": "CALL", "Strike": 34.0, "Data_Vencimento": "2026-02-20"},
+        {"Tipo": "CALL", "Strike": 30.0, "Data_Vencimento": "2026-02-20"},  # repetido
+        {"Tipo": "PUT",  "Strike": 28.0, "Data_Vencimento": "2026-02-20"},
+        {"Tipo": "CALL", "Strike": 99.0, "Data_Vencimento": "2026-03-20"},  # outro venc.
+    ]
+    esc = escada_strikes(cadeia_teste, "CALL", "2026-02-20")
+    assert esc == [30.0, 32.0, 34.0]
+    print("[OK] Caso 7: escada de strikes ordenada, sem repeticao, filtrada.")
+
+    # Caso 8: seletores indexam a escada real (nao usam delta - delta dependeria
+    # de qual vol alimenta o modelo; indice na escada e' verificavel por
+    # inspecao e nao carrega premissa)
+    assert selecionar_strike(esc, spot=30.4, seletor="ATM", tipo="CALL") == 30.0
+    assert selecionar_strike(esc, spot=30.4, seletor="OTM1", tipo="CALL") == 32.0
+    assert selecionar_strike(esc, spot=30.4, seletor="OTM2", tipo="CALL") == 34.0
+    assert selecionar_strike(esc, spot=30.4, seletor="OTM3", tipo="CALL") is None
+    # pra PUT, OTM e' pra BAIXO do spot
+    esc_put = [26.0, 28.0, 30.0, 32.0]
+    assert selecionar_strike(esc_put, spot=30.2, seletor="ATM", tipo="PUT") == 30.0
+    assert selecionar_strike(esc_put, spot=30.2, seletor="OTM1", tipo="PUT") == 28.0
+    assert selecionar_strike(esc_put, spot=30.2, seletor="ITM1", tipo="PUT") == 32.0
+    print("[OK] Caso 8: seletores respeitam a direcao de OTM/ITM por tipo.")
 
     print("\nTodos os casos passaram.")
