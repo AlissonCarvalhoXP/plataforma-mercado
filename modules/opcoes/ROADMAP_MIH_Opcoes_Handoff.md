@@ -173,6 +173,117 @@ LEAN — mais completo para opções, mas sem suporte nativo a B3, exigiria feed
 customizado do zero a partir da brapi). Nenhum dos dois resolve o viés de theta-decay
 nem o tamanho da amostra — não vale adotar antes de resolver os dois pontos acima.
 
+### ✅ 4.4c RESOLVIDO (2026-08-31) — Amostra ampliada via COTAHIST: **sem edge real**
+
+A pendência "amostra pequena" de 4.4b foi atacada de frente: pipeline próprio de
+ingestão do **COTAHIST da B3** (`modules/opcoes/coleta_cotahist.py`, gratuito, sem
+token), cobrindo **2024-2025 inteiros, todos os ativos com opções negociadas**.
+
+**Resultado da coleta:** 3.870.372 linhas limpas em `opcoes_historico`
+(1.734.303 de 2024 + 2.136.069 de 2025), **188 ativos**, **238.918 séries** — contra
+as 63 séries de PETR4 que bloqueavam a calibração antes.
+
+**Quatro bugs reais encontrados e corrigidos no caminho** (todos achados testando
+contra dado real, não por revisão de código):
+
+1. **Dependência do Postgres remoto no meio de job longo** — `coleta_cotahist.py` lia
+   a Selic via `db.engine` (remoto), violando o isolamento deliberado de
+   `modules/opcoes/` (que usa SQLite local de propósito). Causou um
+   `PendingRollbackError` e depois um socket preso em `CloseWait` travando o processo.
+   Corrigido: Selic passou a vir do mesmo SQLite local, e `coleta_bcb_historico.py`
+   ganhou `--db-path` pra popular esse arquivo. Pipeline agora não depende de rede
+   além do download da B3.
+2. **IV presa no piso/teto do solver** — o Newton-Raphson vetorizado não converge
+   quando vega ≈ 0 (opções fundo ITM/OTM: moneyness médio 0,54 nessas linhas vs. 0,11
+   nas saudáveis). **11% das linhas** (479.313) tinham IV grudada em 1e-4 ou 5.0 — não
+   é IV, é falha de convergência. Descartadas na origem.
+3. **Sorriso misturando ativos diferentes** — `_construir_sorrisos_por_dia` agrupava por
+   `(Data, Tipo)`, o que era inofensivo com um ativo só, mas ao juntar 188 ativos
+   misturaria strikes de PETR4 (~R$35) com WEGE3 (~R$50) no mesmo ajuste. Corrigido para
+   `(Data, Tipo, Ativo_Objeto)`, com teste de regressão (Caso 3).
+4. **Colisão de ticker entre ciclos de vencimento** — o código de opção da B3 **não
+   carrega o ano**, e é reciclado: **29.103 dos 238.918 códigos (12,2%)** têm mais de um
+   `Data_Vencimento`. Agrupar séries só por `Codigo_Opcao` colava contratos diferentes,
+   e o "retorno no horizonte" comparava o preço de UM contrato com o de OUTRO. Isso
+   produzia retorno bruto médio de **+15,48% em 5 pregões** (implausível) e inflava o
+   edge de ~3% para ~15%. Corrigido para `(Codigo_Opcao, Data_Vencimento)`.
+
+**Veredito da calibração — não há edge real:**
+
+Com tudo corrigido, o pool completo (176 ativos, 2.322.039 pontos) mostra edge de
++4,98% na melhor combinação (`peso_diff=0.3`, `peso_skew=1.0`). Mas o teste decisivo
+— **edge em função da liquidez** — mostra que isso é artefato de microestrutura:
+
+| Liquidez (pontos por ativo) | Ativos | Edge pool | Edge mediano |
+|---|---|---|---|
+| ≥100k (mais líquidos) | 3 | **−1,32%** | −1,16% |
+| 30k–100k | 20 | +6,21% | +3,05% |
+| 10k–30k | 39 | +4,15% | +2,92% |
+| 3k–10k | 39 | +11,54% | +7,64% |
+| 1k–3k | 30 | +14,53% | +8,69% |
+| <1k (ilíquidos) | 45 | **+25,67%** | +12,45% |
+
+Acumulado pelos mais líquidos: **top 5 = −0,82%**, top 10 = +3,04%, top 20 = +3,59%,
+todos os 176 = +4,98%.
+
+**O edge cresce monotonicamente conforme a liquidez cai** — de −1,3% nos três ativos
+mais negociados até +25,7% nos 45 mais ilíquidos. Essa é a assinatura clássica de
+artefato de microestrutura, não de sinal: opção ilíquida tem preço de fechamento
+defasado, spread largo e pouquíssimos negócios; e como o retorno de opção é convexo
+(perda limitada a −100%, ganho ilimitado), ruído puro produz média positiva.
+**Exatamente onde seria operável, o edge é negativo.**
+
+Casos extremos ilustram o ruído: TRAD tem "edge" de +408,8% com **n=3 pontos**;
+LAVV, −119,6% com n=8. A mediana de 176 ativos majoritariamente ilíquidos descreve
+o ativo ilíquido típico, não vantagem operável — por isso a leitura por faixa de
+liquidez, e não a mediana global, é a que vale.
+
+**Um artefato adicional confirmado:** MGLU (edge +29,8% no recorte líquido) tem salto
+de R$1,32 → R$13,15 num pregão (+896%, 24→27/05/2024) — o grupamento da Magazine
+Luiza. **O COTAHIST traz preços brutos, não ajustados por evento societário.**
+
+**Quanta incerteza há nisso (bootstrap por ativo, 400 reamostragens):**
+
+Reamostrar pontos individuais superestimaria a precisão — janelas de 5 pregões se
+sobrepõem e todas as opções do mesmo ativo/dia se movem juntas. Reamostrando o ativo
+inteiro (bootstrap por cluster):
+
+| Universo | Ativos | Edge | IC 95% | P(edge>0) |
+|---|---|---|---|---|
+| Top 5 mais líquidos | 5 | −0,82% | **[−1,79% , +0,69%]** | 13,8% |
+| Top 10 | 10 | +3,04% | [−0,77% , +10,04%] | 89,2% |
+| Top 20 | 20 | +3,59% | [+0,36% , +8,46%] | 98,2% |
+| Todos | 176 | +4,98% | [+2,90% , +7,76%] | 100% |
+
+**Leitura correta:** nos ativos líquidos o edge é **indistinguível de zero** (o IC
+cruza o zero), não comprovadamente negativo. A afirmação sustentada é "não é
+positivo", não "é negativo". Nos universos amplos o edge é estatisticamente
+significativo — mas significância não conserta viés: um estimador enviesado com IC
+estreito continua enviesado, e o gradiente monotônico por liquidez é o que indica
+viés. Custos de transação (spread, slippage), **não modelados no backtest**, só
+empurrariam o resultado para baixo — o que reforça a decisão prática.
+
+**Limites de confiança:** (a) o tier líquido tem só 5 clusters, então o próprio IC é
+impreciso; (b) um único regime (2024-2025, Selic alta); (c) foi testada UMA
+formulação — linear, horizonte de 5 pregões, regra `score>0 → comprar vol`. Ausência
+de edge nesta formulação não implica que `Diff`/`Skew` sejam inúteis em geral.
+
+**Conclusão honesta:** ampliar a amostra em 3.800x (63 séries → 238.918) **não revelou
+edge nenhum**. O achado de 4.4b se confirma num universo muito maior: `Diff` e `Skew`
+como estão não demonstram vantagem sobre a linha de base nos ativos onde se poderia
+operar. Os pesos `peso_diff=0.6` / `peso_skew=0.6` em `analises_opcoes.py` **seguem
+arbitrários e não devem ser calibrados** com base nisso — calibrar contra ruído de
+microestrutura é pior que não calibrar.
+
+**Limitação conhecida (não corrigida):** eventos societários não são ajustados. Antes de
+qualquer nova tentativa de extrair sinal desta base, isso precisa ser tratado (detectar
+saltos >35% em um pregão e descartar/ajustar a série).
+
+**Desempenho:** `preparar_pontos()` separa a varredura cara (HV móvel, sorrisos, filtros)
+da pontuação, que é a única parte dependente dos pesos — o sweep recalculava tudo 16
+vezes. Caso 4 do auto-teste trava a equivalência entre o score vetorizado e o
+`calcular_score()` do screener ao vivo.
+
 ### 4.5 Correção aplicada (2026-08-30) — piso de preço relevante
 
 Opções negociando abaixo de `PRECO_MINIMO_RELEVANTE = 0.05` (residuais de fim de vida,
