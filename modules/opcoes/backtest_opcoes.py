@@ -87,7 +87,7 @@ def _hv_movel(precos_ativo, i, janela=60):
 
 
 def _construir_sorrisos_por_dia(hist: list[dict]):
-    """Agrupa o histórico por (Data, Tipo, Ativo_Objeto) e ajusta o sorriso
+    """Agrupa o histórico por (Data, Tipo, Ativo_Objeto, Data_Vencimento) e ajusta o sorriso
     (strike->iv) de cada grupo com pontos suficientes - mesma função usada
     pelo screener ao vivo (analises_opcoes.ajustar_sorriso), pra manter o
     backtest fiel ao que roda em produção. Chave ausente/None = sem sorriso
@@ -98,11 +98,17 @@ def _construir_sorrisos_por_dia(hist: list[dict]):
     bastava; ao pooling de 188 ativos (pipeline COTAHIST), omitir Ativo_Objeto
     misturaria strikes de tickers com preços completamente diferentes (ex.
     PETR4 ~R$35 e ITUB4 ~R$30, mas WEGE3 ~R$50) no mesmo ajuste - sorriso sem
-    sentido nenhum."""
+    sentido nenhum.
+
+    Data_Vencimento tambem entra na chave (correção 2026-09-02, mesmo defeito
+    de analises_opcoes.analisar()): a superficie de vol tem estrutura a termo,
+    entao juntar prazos diferentes faz o Skew_pp medir diferenca de PRAZO em
+    vez de desvio de STRIKE."""
     pontos = defaultdict(list)
     for h in hist:
         if h.get("IV") and h.get("Strike"):
-            chave = (h["Data"], h.get("Tipo", "CALL"), h.get("Ativo_Objeto"))
+            chave = (h["Data"], h.get("Tipo", "CALL"), h.get("Ativo_Objeto"),
+                     h.get("Data_Vencimento"))
             pontos[chave].append((h["Strike"], h["IV"]))
     return {chave: ajustar_sorriso(pts) for chave, pts in pontos.items()}
 
@@ -166,7 +172,8 @@ def preparar_pontos(hist: list[dict], horizonte: int = 5, hv_janela: int = 60):
             if not po or po < PRECO_MINIMO_RELEVANTE:
                 continue  # residual de fim de vida - mesma guarda do screener (analisar())
 
-            sorriso = sorrisos.get((p["Data"], p.get("Tipo", "CALL"), p.get("Ativo_Objeto")))
+            sorriso = sorrisos.get((p["Data"], p.get("Tipo", "CALL"),
+                                    p.get("Ativo_Objeto"), p.get("Data_Vencimento")))
             strike = p.get("Strike")
             fut = pts[i + horizonte]["Preco_Opcao"]  # retorno futuro da OPCAO no horizonte
 
@@ -199,9 +206,9 @@ def rodar_backtest(hist: list[dict], peso_diff: float, peso_skew: float = 0.6,
     if diffs.size == 0:
         return Resultado(peso_diff, peso_skew, 0, 0, 0, 0, 0, 0, 0, 0)
 
-    # Score vetorizado. Equivale a calcular_score(diff, skew, liq=0, peso_diff,
-    # peso_skew, peso_liq=0.0) - o termo de liquidez zera porque o historico
-    # analytics nao traz volume. O Caso 4 do auto-teste trava essa equivalencia,
+    # Score vetorizado. Equivale a calcular_score(diff, skew, peso_diff,
+    # peso_skew) - desde 2026-09-02 a formula nao tem mais termo de liquidez
+    # (era o que o backtest ja media). O Caso 4 do auto-teste trava a equivalencia,
     # pra divergir ruidosamente se calcular_score mudar de formula.
     scores = -diffs * peso_diff - skews * peso_skew
 
@@ -324,22 +331,22 @@ if __name__ == "__main__":
     # Dois "ativos" no mesmo dia com faixas de strike totalmente diferentes;
     # se a chave nao incluir Ativo_Objeto, o ajuste combinado explode o fit.
     hist_dois_ativos = [
-        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Strike": 10.0, "IV": 0.30},
-        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Strike": 11.0, "IV": 0.28},
-        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Strike": 12.0, "IV": 0.27},
-        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Strike": 13.0, "IV": 0.29},
-        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Strike": 100.0, "IV": 0.50},
-        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Strike": 110.0, "IV": 0.55},
-        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Strike": 120.0, "IV": 0.60},
-        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Strike": 130.0, "IV": 0.65},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Data_Vencimento": "2026-02-20", "Strike": 10.0, "IV": 0.30},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Data_Vencimento": "2026-02-20", "Strike": 11.0, "IV": 0.28},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Data_Vencimento": "2026-02-20", "Strike": 12.0, "IV": 0.27},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "AAAA", "Data_Vencimento": "2026-02-20", "Strike": 13.0, "IV": 0.29},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Data_Vencimento": "2026-02-20", "Strike": 100.0, "IV": 0.50},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Data_Vencimento": "2026-02-20", "Strike": 110.0, "IV": 0.55},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Data_Vencimento": "2026-02-20", "Strike": 120.0, "IV": 0.60},
+        {"Data": "2026-01-05", "Tipo": "CALL", "Ativo_Objeto": "BBBB", "Data_Vencimento": "2026-02-20", "Strike": 130.0, "IV": 0.65},
     ]
     sorrisos_teste = _construir_sorrisos_por_dia(hist_dois_ativos)
-    assert ("2026-01-05", "CALL", "AAAA") in sorrisos_teste
-    assert ("2026-01-05", "CALL", "BBBB") in sorrisos_teste
-    assert ("2026-01-05", "CALL") not in sorrisos_teste  # chave antiga (sem ativo) nao existe mais
-    iv_ajustada_aaaa = sorrisos_teste[("2026-01-05", "CALL", "AAAA")](11.5)
+    assert ("2026-01-05", "CALL", "AAAA", "2026-02-20") in sorrisos_teste
+    assert ("2026-01-05", "CALL", "BBBB", "2026-02-20") in sorrisos_teste
+    assert ("2026-01-05", "CALL", "AAAA") not in sorrisos_teste  # chave sem vencimento nao existe mais
+    iv_ajustada_aaaa = sorrisos_teste[("2026-01-05", "CALL", "AAAA", "2026-02-20")](11.5)
     assert 0.20 < iv_ajustada_aaaa < 0.40  # continua na faixa de AAAA, nao contaminada por BBBB (~0.5-0.65)
-    print("[OK] Caso 3: sorriso agrupado por (Data, Tipo, Ativo_Objeto) - nao mistura ativos.")
+    print("[OK] Caso 3: sorriso por (Data, Tipo, Ativo, Vencimento) - nao mistura ativos nem prazos.")
 
     # Caso 4: o score vetorizado de rodar_backtest tem que bater com o
     # calcular_score() usado pelo screener ao vivo. Trava a otimizacao de
@@ -348,7 +355,7 @@ if __name__ == "__main__":
     # a medir silenciosamente outra coisa.
     for pd_, ps_ in ((0.3, 1.0), (0.6, 0.6), (1.0, 0.0)):
         for diff_, skew_ in ((12.5, -3.2), (-7.0, 4.4), (0.0, 0.0)):
-            esperado = calcular_score(diff_, skew_, 0, pd_, ps_, peso_liq=0.0)
+            esperado = calcular_score(diff_, skew_, pd_, ps_)
             vetorizado = (-np.array([diff_]) * pd_ - np.array([skew_]) * ps_).item()
             assert abs(esperado - vetorizado) < 1e-12, (pd_, ps_, diff_, skew_)
     print("[OK] Caso 4: score vetorizado == calcular_score() do screener ao vivo.")

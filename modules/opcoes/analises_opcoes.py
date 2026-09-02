@@ -143,14 +143,37 @@ def ajustar_sorriso(pontos: list[tuple[float, float]]):
     return lambda k: float(np.polyval(coefs, k))
 
 
-def calcular_score(diff_pp: float, skew_pp: float, liq: int,
-                    peso_diff: float = 0.6, peso_skew: float = 0.6,
-                    peso_liq: float = 0.05) -> float:
+# Limiar da zona neutra, em pontos de volatilidade. ARBITRARIO e declarado como
+# tal: calibra-lo exigiria poder preditivo que o backtest mostrou nao existir
+# (ver secao 4.4c do ROADMAP_MIH_Opcoes_Handoff.md). Um numero honestamente
+# arbitrario e' preferivel a um numero com aparencia de otimizado.
+LIMIAR_SINAL_PP = 3.0
+
+
+def classificar_sinal(diff_pp: float, skew_pp: float, score: float,
+                       limiar: float = LIMIAR_SINAL_PP) -> str:
+    """Tres estados, com zona neutra explicita. Sem ela, o corte em zero
+    rotulava TODA linha da cadeia como compra ou venda, inclusive desvios
+    irrelevantes. Basta um dos eixos passar do limiar pra virar sinal."""
+    if max(abs(diff_pp), abs(skew_pp)) < limiar:
+        return "NEUTRO"
+    return "COMPRAR_VOL" if score > 0 else "VENDER_VOL"
+
+
+def calcular_score(diff_pp: float, skew_pp: float,
+                    peso_diff: float = 0.6, peso_skew: float = 0.6) -> float:
     """Score do screener - positivo: vol parece barata (comprar); negativo:
     vol parece cara (vender). Dois eixos ortogonais de verdade:
     - diff_pp: gap entre IV e HV (vol atual vs. vol realizada)
     - skew_pp: gap entre a IV desta opcao e a IV que o sorriso do dia (outros
       strikes do mesmo vencimento) preveria pro seu strike
+
+    NAO usa liquidez (removido em 2026-09-02): liquidez e' qualidade de
+    execucao, nao evidencia direcional - o termo log1p(liq)*0,05 empurrava o
+    Score pra cima so' por a opcao ser negociada (com liq=10000, ~+0,46), o
+    bastante pra inverter sinais. Alem disso, o backtest sempre mediu a formula
+    SEM liquidez (chamava com liq=0 e peso_liq=0,0), entao producao e backtest
+    so' passaram a ser a mesma coisa agora.
 
     Deliberadamente NAO usa "desconto" (preco-espaco): e' uma reexpressao
     nao-linear do mesmo gap que diff_pp ja mede - Black-Scholes e' monotonico
@@ -158,11 +181,11 @@ def calcular_score(diff_pp: float, skew_pp: float, liq: int,
     duas evidencias independentes. Achado real ao calibrar o backtest (o sweep
     de peso nunca mudava o sinal de nenhuma linha). Ver
     docs/superpowers/specs/2026-08-30-score-opcoes-sem-desconto-design.md."""
-    return -diff_pp * peso_diff - skew_pp * peso_skew + math.log1p(max(0, liq)) * peso_liq
+    return -diff_pp * peso_diff - skew_pp * peso_skew
 
 
 def analisar(underlying: dict, series: list[dict], selic: float,
-             peso_diff: float = 0.6, peso_skew: float = 0.6, peso_liq: float = 0.05,
+             peso_diff: float = 0.6, peso_skew: float = 0.6,
              liquidez_min: int = 0, hoje: date | None = None) -> list[dict]:
     """Enriquece a cadeia lida do banco e devolve o ranking (lista de dicts).
 
@@ -176,7 +199,7 @@ def analisar(underlying: dict, series: list[dict], selic: float,
     r = selic
 
     calculados = []
-    pontos_por_tipo: dict[str, list[tuple[float, float]]] = {"CALL": [], "PUT": []}
+    pontos_por_chave: dict[tuple[str, str], list[tuple[float, float]]] = {}
     for s in series:
         venc = date.fromisoformat(s["Data_Vencimento"][:10])
         dias_corridos = max(1, (venc - hoje).days)
@@ -194,23 +217,30 @@ def analisar(underlying: dict, series: list[dict], selic: float,
         if liq < liquidez_min:
             continue
 
-        calculados.append((s, mkt, tipo, dias_corridos, T, iv, liq))
-        pontos_por_tipo.setdefault(tipo, []).append((s["Strike"], iv))
+        chave_sorriso = (tipo, s["Data_Vencimento"][:10])
+        calculados.append((s, mkt, tipo, dias_corridos, T, iv, liq, chave_sorriso))
+        pontos_por_chave.setdefault(chave_sorriso, []).append((s["Strike"], iv))
 
-    sorrisos = {tipo: ajustar_sorriso(pontos) for tipo, pontos in pontos_por_tipo.items()}
+    # Sorriso por (Tipo, Vencimento), NAO so' por Tipo: a superficie de vol tem
+    # estrutura a termo, entao juntar prazos diferentes na mesma parabola faz o
+    # Skew_pp medir diferenca de PRAZO em vez de desvio de STRIKE. Verificado
+    # com dado sintetico (Caso 20): com a chave errada, uma serie curta com IV
+    # 20pp acima da longa aparecia com Skew de 10pp que era puro prazo.
+    sorrisos = {chave: ajustar_sorriso(pontos)
+                for chave, pontos in pontos_por_chave.items()}
 
     out: list[LinhaRanking] = []
-    for s, mkt, tipo, dias_corridos, T, iv, liq in calculados:
+    for s, mkt, tipo, dias_corridos, T, iv, liq, chave_sorriso in calculados:
         justo, delta = bs_price_delta(tipo, S, s["Strike"], T, r, HV)
         desconto = (justo - mkt) / justo if justo > 0 else 0.0
         diff = (iv - HV) * 100
 
-        sorriso = sorrisos.get(tipo)
+        sorriso = sorrisos.get(chave_sorriso)
         iv_esperada = sorriso(s["Strike"]) if sorriso else None
         skew = (iv - iv_esperada) * 100 if iv_esperada is not None else 0.0
 
-        score = calcular_score(diff, skew, liq, peso_diff, peso_skew, peso_liq)
-        sinal = "COMPRAR_VOL" if score > 0 else "VENDER_VOL"
+        score = calcular_score(diff, skew, peso_diff, peso_skew)
+        sinal = classificar_sinal(diff, skew, score)
 
         out.append(LinhaRanking(
             Codigo_Opcao=s["Codigo_Opcao"], Tipo=tipo, Strike=s["Strike"],
@@ -317,26 +347,20 @@ def sugerir_hedge(posicao: dict, ranking: list[dict], spot: float, regime: str) 
 
 
 # ---------------- Oportunidades em destaque (Fase F — clareza do ranking) ----------------
-def _texto_desconto(linha: dict) -> str:
-    """Formata o desconto para exibicao. Quando o justo (Black-Scholes) e'
-    proximo de zero (opcao bem fora do dinheiro/perto do vencimento), a razao
-    (justo-mercado)/justo explode numericamente (ex.: -9000%) - nesses casos
-    mostra a diferenca em R$ em vez de um percentual sem sentido."""
-    desconto_pct = linha["Desconto"] * 100
-    if abs(desconto_pct) > 100:
-        diferenca = linha["Justo_BS"] - linha["Preco_Mercado"]
-        return f"desconto extremo (justo ~R$ {linha['Justo_BS']:.2f}, diferença R$ {diferenca:+.2f})"
-    return f"desconto {desconto_pct:+.1f}% sobre o justo"
-
-
 def _texto_oportunidade(linha: dict, sinal: str) -> dict:
-    direcao_txt = "COMPRA" if sinal == "COMPRAR_VOL" else "VENDA"
+    """Descreve o DESVIO OBSERVADO, nao uma previsao.
+
+    O vocabulario antigo ("sinal de COMPRA de volatilidade") era duplamente
+    impreciso: sugeria poder preditivo que o backtest mostrou nao existir (ver
+    secao 4.4c do ROADMAP_MIH_Opcoes_Handoff.md), e a operacao implicada - uma
+    call solta - carrega delta, ou seja, nao e' exposicao a volatilidade."""
+    posicao = "acima" if sinal == "VENDER_VOL" else "abaixo"
     texto = (
         f"{linha['Codigo_Opcao']} ({linha['Tipo']}, strike R$ {linha['Strike']:.2f}, "
-        f"vence em {linha['Dias']} dias) — sinal de {direcao_txt} de volatilidade "
-        f"({_texto_desconto(linha)}, "
-        f"IV {linha['Diff_pp']:+.1f}pp vs. HV, skew {linha['Skew_pp']:+.1f}pp vs. sorriso do dia, "
-        f"liquidez {linha['Liquidez']})."
+        f"vence em {linha['Dias']} dias) — IV {posicao} da referência: "
+        f"{linha['Diff_pp']:+.1f}pp vs. HV, {linha['Skew_pp']:+.1f}pp vs. o sorriso "
+        f"do dia. Liquidez {linha['Liquidez']}. Desvio de preço observado — "
+        f"não é previsão de retorno."
     )
     return {
         "codigo_opcao": linha["Codigo_Opcao"], "tipo": linha["Tipo"],
@@ -430,9 +454,11 @@ if __name__ == "__main__":
     ]
     dest = destacar_oportunidades(ranking_misto)
     assert dest["compra"]["codigo_opcao"] == "PETRC300"  # maior Score entre COMPRAR_VOL (15.3 > 5.0)
-    assert "COMPRA" in dest["compra"]["texto"]
     assert dest["venda"]["codigo_opcao"] == "PETRP280"  # menor Score entre VENDER_VOL (-12.0 < -3.0)
-    assert "VENDA" in dest["venda"]["texto"]
+    # O texto descreve o lado do desvio, nao prescreve operacao (ver Caso 19):
+    # "COMPRA"/"VENDA" saiu do vocabulario junto com a promessa de previsao.
+    assert "abaixo" in dest["compra"]["texto"].lower()
+    assert "acima" in dest["venda"]["texto"].lower()
     print("[OK] Caso 7: destacar_oportunidades extrai a melhor compra e a melhor venda.")
 
     # Caso 8: sem candidatas de um lado (ou ranking vazio) -> None, sem excecao
@@ -450,10 +476,14 @@ if __name__ == "__main__":
         "Liquidez": 601, "Score": -50.0, "Sinal": "VENDER_VOL",
     }
     dest4 = destacar_oportunidades([linha_justo_zero])
-    assert "extremo" in dest4["venda"]["texto"]
-    assert "-9100" not in dest4["venda"]["texto"]  # nao mostra o percentual absurdo
-    assert "R$ 0.01" in dest4["venda"]["texto"]  # mostra o justo em R$ no lugar
-    print("[OK] Caso 9: justo perto de zero -> desconto extremo em R$, nao percentual absurdo.")
+    # O texto novo nao fala de desconto (preco-espaco) nenhum - descreve o
+    # desvio em pontos de volatilidade. Entao o percentual absurdo que o
+    # desconto produzia quando o justo fica perto de zero nao tem por onde
+    # vazar. Asserido aqui pra travar isso contra regressao.
+    assert "-9100" not in dest4["venda"]["texto"]
+    assert "%" not in dest4["venda"]["texto"]
+    assert "19.6pp" in dest4["venda"]["texto"] or "+19.6pp" in dest4["venda"]["texto"]
+    print("[OK] Caso 9: justo perto de zero nao produz percentual absurdo no texto.")
 
     # Caso 10: opcoes quase sem valor (abaixo de PRECO_MINIMO_RELEVANTE) saem do ranking
     underlying_teste = {"Spot": 40.0, "HV_60d": 0.30}
@@ -481,15 +511,16 @@ if __name__ == "__main__":
     assert ajustar_sorriso([(30.0, 0.35), (30.0, 0.36)]) is None  # 1 strike so (repetido)
     print("[OK] Caso 11: ajustar_sorriso exige >=4 strikes distintos, senao devolve None.")
 
-    # Caso 12: calcular_score combina diff e skew no mesmo sentido; liquidez desempata
-    s1 = calcular_score(diff_pp=-10.0, skew_pp=-5.0, liq=1000, peso_diff=0.6, peso_skew=0.6)
+    # Caso 12: calcular_score combina diff e skew no mesmo sentido.
+    # A versao anterior deste caso afirmava que "liquidez desempata pra cima" -
+    # comportamento removido de proposito em 2026-09-02 (ver Caso 17): liquidez
+    # e' qualidade de execucao, nao evidencia de que a vol esta' barata.
+    s1 = calcular_score(diff_pp=-10.0, skew_pp=-5.0, peso_diff=0.6, peso_skew=0.6)
     assert s1 > 0  # os dois sinais dizem "vol barata" -> comprar
-    s2 = calcular_score(diff_pp=10.0, skew_pp=5.0, liq=1000, peso_diff=0.6, peso_skew=0.6)
+    s2 = calcular_score(diff_pp=10.0, skew_pp=5.0, peso_diff=0.6, peso_skew=0.6)
     assert s2 < 0  # os dois dizem "vol cara" -> vender
-    s3 = calcular_score(diff_pp=0.0, skew_pp=0.0, liq=10000, peso_diff=0.6, peso_skew=0.6)
-    s4 = calcular_score(diff_pp=0.0, skew_pp=0.0, liq=100, peso_diff=0.6, peso_skew=0.6)
-    assert s3 > s4  # liquidez maior desempata pra cima
-    print("[OK] Caso 12: calcular_score combina diff e skew (mesmo sentido), liquidez desempata.")
+    assert s1 == -s2  # simetrico: mesma magnitude de desvio, sinais opostos
+    print("[OK] Caso 12: calcular_score combina diff e skew no mesmo sentido.")
 
     # Caso 13: analisar() com menos de 4 strikes por Tipo -> Skew_pp = 0.0 (sem sorriso ajustavel)
     series_poucas_strikes = [
@@ -549,5 +580,65 @@ if __name__ == "__main__":
     dt = time.time() - t0
     assert dt < 30.0, f"implied_vol_lote levou {dt:.1f}s para {n_grande} linhas - esperado < 30s"
     print(f"[OK] Caso 16: implied_vol_lote calculou {n_grande} IVs em {dt:.2f}s (< 30s).")
+
+    # Caso 17: Score nao usa mais liquidez. O termo de liquidez empurrava o
+    # Score pra cima so' por a opcao ser negociada (log1p(10000)*0,05 ~ +0,46),
+    # o bastante pra inverter o sinal de venda pra compra - liquidez e'
+    # qualidade de execucao, nao evidencia de que a vol esta' barata.
+    # Alem disso, o backtest sempre mediu a formula SEM liquidez (chamava com
+    # liq=0 e peso_liq=0,0): so' agora producao e backtest sao a mesma coisa.
+    assert calcular_score(10.0, 0.0) == -6.0            # -10 * 0,6
+    assert calcular_score(0.0, 10.0) == -6.0            # -10 * 0,6
+    assert calcular_score(-10.0, -10.0) == 12.0         # vol barata nos dois eixos
+    print("[OK] Caso 17: Score usa so' Diff e Skew - liquidez saiu da formula.")
+
+    # Caso 18: zona neutra - desvio pequeno nao vira sinal
+    assert classificar_sinal(1.0, 0.5, calcular_score(1.0, 0.5)) == "NEUTRO"
+    assert classificar_sinal(10.0, 0.0, calcular_score(10.0, 0.0)) == "VENDER_VOL"
+    assert classificar_sinal(-10.0, 0.0, calcular_score(-10.0, 0.0)) == "COMPRAR_VOL"
+    # basta UM dos eixos passar do limiar
+    assert classificar_sinal(0.0, 10.0, calcular_score(0.0, 10.0)) == "VENDER_VOL"
+    print("[OK] Caso 18: zona neutra evita rotular desvio irrelevante.")
+
+    # Caso 19: o texto de saida descreve DESVIO OBSERVADO, nunca previsao nem
+    # "sinal de compra". O backtest mostrou que o Score nao preve retorno;
+    # manter o vocabulario de recomendacao seria prometer o que nao se sustenta.
+    linha_texto = {
+        "Codigo_Opcao": "PETRA300", "Tipo": "CALL", "Strike": 30.0, "Dias": 25,
+        "Preco_Mercado": 1.80, "Justo_BS": 1.50, "Desconto": -0.20,
+        "Diff_pp": 9.0, "Skew_pp": 4.0, "Liquidez": 1200,
+    }
+    saida = _texto_oportunidade(linha_texto, "VENDER_VOL")
+    texto_gerado = saida["texto"]
+    assert "sinal de" not in texto_gerado.lower()
+    assert "recomend" not in texto_gerado.lower()
+    assert "acima" in texto_gerado.lower() or "abaixo" in texto_gerado.lower()
+    assert "PETRA300" in texto_gerado
+    print("[OK] Caso 19: texto descreve desvio observado, sem vocabulario de previsao.")
+
+    # Caso 20: o sorriso e' ajustado por (Tipo, Vencimento), nao so' por Tipo.
+    # A superficie de vol tem estrutura a termo: uma serie de 7 dias e outra de
+    # 90 tem niveis de IV sistematicamente diferentes. Juntando as duas na mesma
+    # parabola, parte do Skew_pp passa a medir diferenca de PRAZO em vez de
+    # desvio de STRIKE - que e' o que ele deveria medir.
+    hoje_teste = date(2026, 1, 5)
+    underlying_prazo = {"Spot": 30.0, "HV_60d": 0.30}
+    series_prazo = []
+    for strike, iv in ((28.0, 0.50), (30.0, 0.48), (32.0, 0.49), (34.0, 0.52)):
+        series_prazo.append({"Codigo_Opcao": f"CURTA{strike:.0f}", "Tipo": "CALL",
+                             "Strike": strike, "Data_Vencimento": "2026-01-16",
+                             "Ultimo": 1.20, "IV_Fonte": iv, "Volume": 100})
+    for strike, iv in ((28.0, 0.30), (30.0, 0.28), (32.0, 0.29), (34.0, 0.32)):
+        series_prazo.append({"Codigo_Opcao": f"LONGA{strike:.0f}", "Tipo": "CALL",
+                             "Strike": strike, "Data_Vencimento": "2026-04-17",
+                             "Ultimo": 2.50, "IV_Fonte": iv, "Volume": 100})
+
+    ranking_prazo = analisar(underlying_prazo, series_prazo, selic=0.12, hoje=hoje_teste)
+    # Cada serie e' comparada ao sorriso do SEU vencimento, entao o Skew fica
+    # pequeno nos dois grupos. Com a chave errada (so' Tipo), o grupo curto
+    # apareceria ~10pp acima e o longo ~10pp abaixo de um sorriso medio.
+    for linha in ranking_prazo:
+        assert abs(linha["Skew_pp"]) < 5.0, (linha["Codigo_Opcao"], linha["Skew_pp"])
+    print("[OK] Caso 20: sorriso por (Tipo, Vencimento) - nao mistura prazos.")
 
     print("\nTodos os casos passaram.")
