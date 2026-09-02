@@ -242,6 +242,32 @@ liquidez, e não a mediana global, é a que vale.
 de R$1,32 → R$13,15 num pregão (+896%, 24→27/05/2024) — o grupamento da Magazine
 Luiza. **O COTAHIST traz preços brutos, não ajustados por evento societário.**
 
+**Quanta incerteza há nisso (bootstrap por ativo, 400 reamostragens):**
+
+Reamostrar pontos individuais superestimaria a precisão — janelas de 5 pregões se
+sobrepõem e todas as opções do mesmo ativo/dia se movem juntas. Reamostrando o ativo
+inteiro (bootstrap por cluster):
+
+| Universo | Ativos | Edge | IC 95% | P(edge>0) |
+|---|---|---|---|---|
+| Top 5 mais líquidos | 5 | −0,82% | **[−1,79% , +0,69%]** | 13,8% |
+| Top 10 | 10 | +3,04% | [−0,77% , +10,04%] | 89,2% |
+| Top 20 | 20 | +3,59% | [+0,36% , +8,46%] | 98,2% |
+| Todos | 176 | +4,98% | [+2,90% , +7,76%] | 100% |
+
+**Leitura correta:** nos ativos líquidos o edge é **indistinguível de zero** (o IC
+cruza o zero), não comprovadamente negativo. A afirmação sustentada é "não é
+positivo", não "é negativo". Nos universos amplos o edge é estatisticamente
+significativo — mas significância não conserta viés: um estimador enviesado com IC
+estreito continua enviesado, e o gradiente monotônico por liquidez é o que indica
+viés. Custos de transação (spread, slippage), **não modelados no backtest**, só
+empurrariam o resultado para baixo — o que reforça a decisão prática.
+
+**Limites de confiança:** (a) o tier líquido tem só 5 clusters, então o próprio IC é
+impreciso; (b) um único regime (2024-2025, Selic alta); (c) foi testada UMA
+formulação — linear, horizonte de 5 pregões, regra `score>0 → comprar vol`. Ausência
+de edge nesta formulação não implica que `Diff`/`Skew` sejam inúteis em geral.
+
 **Conclusão honesta:** ampliar a amostra em 3.800x (63 séries → 238.918) **não revelou
 edge nenhum**. O achado de 4.4b se confirma num universo muito maior: `Diff` e `Skew`
 como estão não demonstram vantagem sobre a linha de base nos ativos onde se poderia
