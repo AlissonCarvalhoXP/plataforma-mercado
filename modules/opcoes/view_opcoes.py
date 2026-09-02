@@ -166,3 +166,180 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
                         )
                 except Exception as exc:
                     st.warning(f"{ticker}: não foi possível calcular a sugestão de hedge ({exc}).")
+
+    # ---------------- Montar operacao a partir de um cenario ----------------
+    # Secao aditiva. A direcao da operacao vem do CENARIO declarado pelo
+    # usuario, nunca da ferramenta: o backtest sobre 3,87 milhoes de linhas do
+    # COTAHIST mostrou que o Score nao preve retorno (secao 4.4c do
+    # ROADMAP_MIH_Opcoes_Handoff.md). O que a ferramenta faz de util aqui e'
+    # quantificar o risco exato e mostrar onde o cenario diverge do preco.
+    import estruturas_opcoes as eo
+    import distribuicao_opcoes as dop
+    from datetime import date as _date
+
+    st.markdown("---")
+    st.subheader("🧩 Montar operação a partir de um cenário")
+    st.caption(
+        "O desvio de preço observado (IV vs. HV e vs. o sorriso) **não prevê "
+        "retorno** — o backtest sobre 3,87 milhões de linhas não encontrou "
+        "vantagem estatística nos ativos líquidos. A direção vem do seu cenário, "
+        "não da ferramenta. " + DISCLAIMER
+    )
+
+    vencimentos = sorted({linha["Data_Vencimento"] for linha in rank})
+    if not vencimentos:
+        st.info("Sem vencimentos na cadeia atual.")
+        return
+
+    vencimento_escolhido = st.selectbox("Vencimento", vencimentos, key="venc_cenario")
+    spot = float(und["Spot"])
+
+    st.markdown("**Seu cenário** — preço-alvo e probabilidade que você atribui")
+    colunas = st.columns(3)
+    entradas = []
+    padroes = (("alta", spot * 1.15, 0.25),
+               ("base", spot, 0.50),
+               ("baixa", spot * 0.85, 0.25))
+    for coluna, (nome, alvo_padrao, prob_padrao) in zip(colunas, padroes):
+        with coluna:
+            st.markdown(f"*{nome.capitalize()}*")
+            entradas.append({
+                "Cenario": nome,
+                "Preco_Alvo": st.number_input(
+                    f"Alvo ({nome})", value=float(round(alvo_padrao, 2)),
+                    key=f"alvo_{nome}"),
+                "Probabilidade": st.number_input(
+                    f"Probabilidade ({nome})", 0.0, 1.0, float(prob_padrao), 0.05,
+                    key=f"prob_{nome}"),
+                "Premissa": st.text_input(f"Premissa ({nome})", key=f"premissa_{nome}"),
+            })
+
+    soma = sum(e["Probabilidade"] for e in entradas)
+    if abs(soma - 1.0) > 0.01:
+        st.warning(f"As probabilidades somam {soma:.0%} — ajuste para 100%.")
+    elif st.button("Salvar cenário"):
+        db_opcoes.init_schema_cenarios(db_path)
+        for cenario in entradas:
+            db_opcoes.gravar_cenario(
+                ativo, str(_date.today()), vencimento_escolhido, cenario["Cenario"],
+                cenario["Preco_Alvo"], cenario["Probabilidade"],
+                cenario["Premissa"], db_path)
+        st.success("Cenário salvo. A data de declaração fica registrada para aferição futura.")
+
+    db_opcoes.init_schema_cenarios(db_path)
+    cenarios_salvos = db_opcoes.ler_cenarios(ativo, vencimento_escolhido, db_path)
+    if not cenarios_salvos:
+        st.info("Declare e salve um cenário acima para ver as operações.")
+        return
+
+    do_vencimento = [linha for linha in rank
+                     if linha["Data_Vencimento"] == vencimento_escolhido]
+    strikes = [linha["Strike"] for linha in do_vencimento]
+    ivs = [linha["IV"] for linha in do_vencimento]
+    dias = do_vencimento[0]["Dias"] if do_vencimento else 30
+
+    faixas = dop.distribuicao_implicita(strikes, ivs, spot, dias / 365, selic)
+
+    if faixas is None:
+        st.info(
+            "Não foi possível extrair a distribuição implícita deste vencimento "
+            "(menos de 4 strikes distintos, ou o ajuste do sorriso ficou "
+            "inconsistente com não-arbitragem). As estruturas abaixo continuam "
+            "válidas — só a comparação de probabilidades fica indisponível."
+        )
+    else:
+        st.markdown("**Embutido no preço vs. seu cenário**")
+        st.caption(
+            "A distribuição implícita é **neutra ao risco**: ela embute prêmio de "
+            "risco de variância, que para ações infla a cauda de baixa. Mostra o "
+            "que está *embutido no preço*, não o que o mercado *acredita* — parte "
+            "da divergência é remuneração de risco, não discordância de opinião."
+        )
+        comparacao = dop.comparar_distribuicoes(faixas, cenarios_salvos)
+        st.dataframe(pd.DataFrame([{
+            "Faixa": f"R$ {linha['limite_inferior']:.2f} – {linha['limite_superior']:.2f}",
+            "Embutido no preço": f"{linha['implicita']:.1%}",
+            "Seu cenário": f"{linha['cenario']:.1%}",
+            "Divergência (p.p.)": f"{linha['divergencia'] * 100:+.1f}",
+        } for linha in comparacao]), use_container_width=True, hide_index=True)
+
+    # A direcao vem do CENARIO declarado, nunca da ferramenta.
+    alvo_base = next((float(c["Preco_Alvo"]) for c in cenarios_salvos
+                      if c["Cenario"] == "base"), spot)
+    if alvo_base > spot * 1.02:
+        tese_direcao = "alta"
+    elif alvo_base < spot * 0.98:
+        tese_direcao = "baixa"
+    else:
+        tese_direcao = "neutra"
+
+    iv_media = sum(ivs) / len(ivs) if ivs else 0.0
+    tese_vol = "cara" if iv_media > float(und["HV_60d"]) else "barata"
+
+    # Posicao na carteira entra como VIABILIDADE (habilita venda coberta),
+    # nunca como visao direcional inferida: estar long por razao estrutural,
+    # querendo proteger, e' o oposto de estar long por achar que sobe.
+    tem_posicao = False
+    if carteira_df is not None and not carteira_df.empty and "ativo" in carteira_df:
+        tickers = {str(t).strip().upper() for t in carteira_df["ativo"]}
+        tem_posicao = any(t.startswith(ativo[:4].upper()) for t in tickers)
+
+    montadas, recusas = eo.montar_estruturas(
+        do_vencimento, spot, vencimento_escolhido, tese_vol, tese_direcao,
+        liquidez_min=int(liq_min), tem_posicao=tem_posicao)
+
+    st.markdown(
+        f"**Operações viáveis** — vol {tese_vol}, direção *{tese_direcao}* (do seu cenário)"
+    )
+
+    def _ve_implicito_texto(dop_mod, estrutura, faixas_calc):
+        """Um traco quando o VE implicito seria enganoso - ver
+        distribuicao_opcoes.valor_esperado_implicito()."""
+        if faixas_calc is None:
+            return "—"
+        valor = dop_mod.valor_esperado_implicito(
+            estrutura.pernas, faixas_calc, estrutura.perfil)
+        return "—" if valor is None else f"R$ {valor:,.2f}"
+
+    linhas_tabela = []
+    for estrutura in montadas:
+        perfil = estrutura.perfil
+        linhas_tabela.append({
+            "Estrutura": estrutura.nome,
+            "Pernas": " / ".join(f"{p.lado} {p.tipo} {p.strike:.2f}"
+                                 for p in estrutura.pernas),
+            "Prêmio líquido": f"R$ {perfil.premio_liquido:,.2f}",
+            "Perda máxima": ("ILIMITADA" if perfil.perda_maxima is None
+                             else f"R$ {perfil.perda_maxima:,.2f}"),
+            "Ganho máximo": ("ILIMITADO" if perfil.ganho_maximo is None
+                             else f"R$ {perfil.ganho_maximo:,.2f}"),
+            "Breakevens": ", ".join(f"{b:.2f}" for b in perfil.breakevens),
+            "VE sob seu cenário": f"R$ {dop.valor_esperado(estrutura.pernas, cenarios_salvos):,.2f}",
+            "VE embutido no preço": _ve_implicito_texto(dop, estrutura, faixas),
+        })
+
+    if linhas_tabela:
+        st.dataframe(pd.DataFrame(linhas_tabela), use_container_width=True, hide_index=True)
+        st.caption(
+            "As duas últimas colunas mostram o mesmo payoff sob as duas visões — a "
+            "diferença é o ganho que existe **se a sua premissa estiver certa**. A "
+            "ferramenta não elege uma estrutura vencedora. **Perda máxima é no "
+            "vencimento**: não protege de marcação a mercado adversa nem de chamada "
+            "de margem antes disso. Margem exigida não é calculada aqui — consulte "
+            "sua corretora."
+        )
+        if faixas is not None and dop.massa_total(faixas) < dop.MASSA_MINIMA_CONFIAVEL:
+            st.caption(
+                f"A distribuição implícita cobre {dop.massa_total(faixas):.1%} da "
+                "probabilidade — o resto está nas caudas, fora do intervalo de "
+                "strikes listados. Por isso o VE embutido no preço aparece como "
+                "«—» nas estruturas de risco ilimitado: a cauda que falta é "
+                "exatamente onde elas perdem, e o número ficaria inflado."
+            )
+    else:
+        st.info("Nenhuma estrutura do catálogo é viável nesta cadeia.")
+
+    if recusas:
+        with st.expander(f"{len(recusas)} estruturas não puderam ser montadas"):
+            for motivo in recusas:
+                st.write(f"- {motivo}")

@@ -114,6 +114,46 @@ def comparar_distribuicoes(faixas: list[FaixaProbabilidade],
     return saida
 
 
+def massa_total(faixas: list[FaixaProbabilidade]) -> float:
+    """Fracao da probabilidade total coberta pelas faixas.
+
+    A distribuicao so' cobre o intervalo entre o menor e o maior strike
+    LISTADO, entao sempre falta a massa das caudas. Medido em cadeia real
+    (PETR4): 0,923 - quase 8% da probabilidade fica de fora."""
+    return sum(f.probabilidade for f in faixas)
+
+
+# Acima disso, a cauda faltante e' pequena o bastante para nao distorcer o
+# valor esperado de estrutura com risco ilimitado. Abaixo, distorce.
+MASSA_MINIMA_CONFIAVEL = 0.99
+
+
+def valor_esperado_implicito(pernas, faixas: list[FaixaProbabilidade],
+                              perfil) -> float | None:
+    """Valor esperado sob a distribuicao implicita, ou None quando o numero
+    seria enganoso.
+
+    Por que existe: a distribuicao implicita e' truncada no intervalo de
+    strikes listados, e a massa que falta esta' justamente nas CAUDAS. Para
+    uma estrutura de risco ilimitado (venda de straddle, venda descoberta), a
+    cauda omitida e' exatamente onde moram as perdas catastroficas - entao o
+    valor esperado calculado sobre a distribuicao truncada fica
+    sistematicamente INFLADO.
+
+    Verificado em cadeia real do PETR4: venda de straddle aparecia com valor
+    esperado de +R$91 sob a implicita, quando sob a medida neutra ao risco o
+    valor esperado de qualquer posicao de opcao deveria ser ~0 por
+    construcao. A distribuicao somava 0,923.
+
+    Por isso: se a estrutura tem perda ou ganho ilimitado E a massa coberta
+    nao chega a MASSA_MINIMA_CONFIAVEL, devolve None em vez de um numero que
+    o proprio metodo sabe estar enviesado."""
+    ilimitada = perfil.perda_maxima is None or perfil.ganho_maximo is None
+    if ilimitada and massa_total(faixas) < MASSA_MINIMA_CONFIAVEL:
+        return None
+    return valor_esperado(pernas, faixas)
+
+
 def valor_esperado(pernas, distribuicao) -> float:
     """Valor esperado do payoff no vencimento sob a distribuicao dada.
 
@@ -212,5 +252,34 @@ if __name__ == "__main__":
     # sob o cenario, que poe 25% acima de 40, a trava vale mais que sob o preco
     assert ve_cenario > ve_implicito
     print("[OK] Caso 6: valor esperado calculado sob as duas distribuicoes.")
+
+    # Caso 7: estrutura de risco ILIMITADO sobre distribuicao truncada devolve
+    # None, nao um numero inflado. A massa que falta na implicita esta' nas
+    # caudas - exatamente onde a venda de straddle perde. Achado em cadeia real
+    # do PETR4: aparecia VE de +R$91 quando sob medida neutra ao risco deveria
+    # ser ~0, porque a distribuicao so' somava 0,923.
+    import estruturas_opcoes as est2
+    straddle_vendido = [
+        est2.Perna(lado="vender", tipo="CALL", strike=30.0, premio=1.50),
+        est2.Perna(lado="vender", tipo="PUT", strike=30.0, premio=1.00),
+    ]
+    perfil_ilimitado = est2.perfil_risco(straddle_vendido)
+    assert perfil_ilimitado.perda_maxima is None   # confirma que e' ilimitada
+
+    faixas_truncadas = [FaixaProbabilidade(26.0, 32.0, 0.50),
+                        FaixaProbabilidade(32.0, 38.0, 0.42)]   # soma 0,92
+    assert abs(massa_total(faixas_truncadas) - 0.92) < 1e-9
+    assert valor_esperado_implicito(straddle_vendido, faixas_truncadas,
+                                     perfil_ilimitado) is None
+
+    # com risco limitado, o truncamento nao distorce do mesmo jeito -> calcula
+    trava_limitada = [
+        est2.Perna(lado="comprar", tipo="CALL", strike=30.0, premio=2.00),
+        est2.Perna(lado="vender", tipo="CALL", strike=35.0, premio=0.50),
+    ]
+    perfil_limitado = est2.perfil_risco(trava_limitada)
+    assert valor_esperado_implicito(trava_limitada, faixas_truncadas,
+                                     perfil_limitado) is not None
+    print("[OK] Caso 7: VE implicito recusado para risco ilimitado sobre cauda truncada.")
 
     print("\nTodos os casos passaram.")
