@@ -160,6 +160,134 @@ def selecionar_strike(escada: list[float], spot: float, seletor: str,
     return None
 
 
+@dataclass(frozen=True)
+class DeclaracaoEstrutura:
+    """Uma estrutura e' DECLARADA, nao codificada: acrescentar uma linha ao
+    CATALOGO basta, porque a matematica de risco (perfil_risco) e' escrita e
+    testada uma vez so'. Cada perna e' (lado, tipo, seletor, quantidade)."""
+    nome: str
+    tese_vol: str        # "cara" | "barata"
+    tese_direcao: str    # "alta" | "baixa" | "neutra"
+    pernas: tuple[tuple[str, str, str, int], ...]
+    exige_posicao: bool = False   # True = so' viavel tendo a acao (venda coberta)
+
+
+# A ferramenta NUNCA sugere direcao - o eixo direcional vem do cenario
+# declarado pelo usuario (ver distribuicao_opcoes.py). Estruturas com
+# tese_direcao "neutra" sao as neutras em delta, oferecidas quando nao ha
+# visao direcional declarada.
+CATALOGO: list[DeclaracaoEstrutura] = [
+    # --- neutras em delta: expressam so' a tese de volatilidade ---
+    DeclaracaoEstrutura("compra de straddle", "barata", "neutra",
+                        (("comprar", "CALL", "ATM", 1), ("comprar", "PUT", "ATM", 1))),
+    DeclaracaoEstrutura("compra de strangle", "barata", "neutra",
+                        (("comprar", "CALL", "OTM1", 1), ("comprar", "PUT", "OTM1", 1))),
+    DeclaracaoEstrutura("venda de straddle", "cara", "neutra",
+                        (("vender", "CALL", "ATM", 1), ("vender", "PUT", "ATM", 1))),
+    DeclaracaoEstrutura("venda de strangle", "cara", "neutra",
+                        (("vender", "CALL", "OTM1", 1), ("vender", "PUT", "OTM1", 1))),
+    DeclaracaoEstrutura("borboleta comprada com calls", "cara", "neutra",
+                        (("comprar", "CALL", "ITM1", 1), ("vender", "CALL", "ATM", 2),
+                         ("comprar", "CALL", "OTM1", 1))),
+    DeclaracaoEstrutura("condor com calls", "cara", "neutra",
+                        (("comprar", "CALL", "ITM2", 1), ("vender", "CALL", "ITM1", 1),
+                         ("vender", "CALL", "OTM1", 1), ("comprar", "CALL", "OTM2", 1))),
+    # --- direcionais: so' aparecem com visao declarada ---
+    DeclaracaoEstrutura("compra de CALL", "barata", "alta",
+                        (("comprar", "CALL", "ATM", 1),)),
+    DeclaracaoEstrutura("trava de alta com calls", "barata", "alta",
+                        (("comprar", "CALL", "ATM", 1), ("vender", "CALL", "OTM1", 1))),
+    DeclaracaoEstrutura("venda de PUT", "cara", "alta",
+                        (("vender", "PUT", "OTM1", 1),)),
+    DeclaracaoEstrutura("trava de alta com puts", "cara", "alta",
+                        (("vender", "PUT", "ATM", 1), ("comprar", "PUT", "OTM1", 1))),
+    DeclaracaoEstrutura("compra de PUT", "barata", "baixa",
+                        (("comprar", "PUT", "ATM", 1),)),
+    DeclaracaoEstrutura("trava de baixa com puts", "barata", "baixa",
+                        (("comprar", "PUT", "ATM", 1), ("vender", "PUT", "OTM1", 1))),
+    DeclaracaoEstrutura("venda coberta de CALL", "cara", "baixa",
+                        (("vender", "CALL", "OTM1", 1),), exige_posicao=True),
+    DeclaracaoEstrutura("trava de baixa com calls", "cara", "baixa",
+                        (("vender", "CALL", "ATM", 1), ("comprar", "CALL", "OTM1", 1))),
+]
+
+
+@dataclass(frozen=True)
+class EstruturaMontada:
+    nome: str
+    pernas: list[Perna]
+    perfil: PerfilRisco
+
+
+def _indexar_cadeia(cadeia: list[dict], vencimento: str) -> dict[tuple[str, float], dict]:
+    return {
+        (linha["Tipo"], float(linha["Strike"])): linha
+        for linha in cadeia
+        if str(linha.get("Data_Vencimento", ""))[:10] == vencimento[:10]
+    }
+
+
+def montar_estruturas(cadeia: list[dict], spot: float, vencimento: str,
+                       tese_vol: str, tese_direcao: str, liquidez_min: int = 0,
+                       tem_posicao: bool = False) -> tuple[list[EstruturaMontada], list[str]]:
+    """Monta toda estrutura do catalogo compativel com a tese, para o
+    vencimento dado. Devolve (montadas, motivos_das_recusas).
+
+    Uma estrutura so' e' oferecida se TODAS as pernas existem na cadeia e
+    passam na liquidez minima. Quando nao e' possivel, o motivo entra na
+    segunda lista - silencio inexplicado seria pior que ausencia."""
+    indice = _indexar_cadeia(cadeia, vencimento)
+    escadas = {tipo: escada_strikes(cadeia, tipo, vencimento) for tipo in ("CALL", "PUT")}
+
+    # "neutra" oferece so' as neutras em delta; uma visao direcional oferece
+    # as daquela direcao MAIS as neutras (que continuam validas).
+    if tese_direcao == "neutra":
+        direcoes_aceitas = {"neutra"}
+    else:
+        direcoes_aceitas = {"neutra", tese_direcao}
+
+    montadas: list[EstruturaMontada] = []
+    motivos: list[str] = []
+
+    for decl in CATALOGO:
+        if decl.tese_vol != tese_vol or decl.tese_direcao not in direcoes_aceitas:
+            continue
+        if decl.exige_posicao and not tem_posicao:
+            # Vender call sem ter o papel nao e' venda coberta, e' venda
+            # descoberta - perda ilimitada, perfil totalmente diferente do que
+            # o nome da estrutura sugere. Melhor nao oferecer.
+            motivos.append(f"{decl.nome}: exige posicao no ativo, que nao ha na carteira")
+            continue
+
+        pernas: list[Perna] = []
+        motivo_recusa = None
+        for lado, tipo, seletor, quantidade in decl.pernas:
+            strike = selecionar_strike(escadas[tipo], spot, seletor, tipo)
+            if strike is None:
+                motivo_recusa = (f"{decl.nome}: cadeia nao tem o strike {seletor} "
+                                 f"de {tipo} neste vencimento")
+                break
+            linha = indice.get((tipo, strike))
+            if linha is None:
+                motivo_recusa = f"{decl.nome}: serie {tipo} {strike:.2f} nao existe na cadeia"
+                break
+            if float(linha.get("Liquidez", 0) or 0) < liquidez_min:
+                motivo_recusa = (f"{decl.nome}: perna {tipo} {strike:.2f} tem liquidez "
+                                 f"abaixo do minimo ({liquidez_min})")
+                break
+            premio = float(linha.get("Preco_Mercado") or 0)
+            pernas.append(Perna(lado=lado, tipo=tipo, strike=strike, premio=premio,
+                                quantidade=quantidade, vencimento=vencimento[:10]))
+
+        if motivo_recusa:
+            motivos.append(motivo_recusa)
+            continue
+        montadas.append(EstruturaMontada(nome=decl.nome, pernas=pernas,
+                                          perfil=perfil_risco(pernas)))
+
+    return montadas, motivos
+
+
 if __name__ == "__main__":
     # Trava de alta: compra CALL 30 por R$2,00, vende CALL 35 por R$0,50.
     # Debito liquido de R$1,50 por acao.
@@ -252,5 +380,73 @@ if __name__ == "__main__":
     assert selecionar_strike(esc_put, spot=30.2, seletor="OTM1", tipo="PUT") == 28.0
     assert selecionar_strike(esc_put, spot=30.2, seletor="ITM1", tipo="PUT") == 32.0
     print("[OK] Caso 8: seletores respeitam a direcao de OTM/ITM por tipo.")
+
+    # Caso 9: monta as estruturas viaveis da tese e devolve perfil de risco
+    cadeia_completa = []
+    for strike, premio in ((28.0, 3.20), (30.0, 1.80), (32.0, 0.90), (34.0, 0.40)):
+        cadeia_completa.append({"Codigo_Opcao": f"C{strike:.0f}", "Tipo": "CALL",
+                                "Strike": strike, "Data_Vencimento": "2026-02-20",
+                                "Preco_Mercado": premio, "Liquidez": 500})
+    for strike, premio in ((28.0, 0.50), (30.0, 1.10), (32.0, 2.30), (34.0, 4.10)):
+        cadeia_completa.append({"Codigo_Opcao": f"P{strike:.0f}", "Tipo": "PUT",
+                                "Strike": strike, "Data_Vencimento": "2026-02-20",
+                                "Preco_Mercado": premio, "Liquidez": 500})
+
+    montadas, recusas = montar_estruturas(
+        cadeia_completa, spot=30.0, vencimento="2026-02-20",
+        tese_vol="barata", tese_direcao="alta")
+    nomes = {m.nome for m in montadas}
+    assert "compra de CALL" in nomes
+    assert "trava de alta com calls" in nomes
+    # tese direcional de ALTA nao pode oferecer estrutura de BAIXA
+    assert "trava de baixa com puts" not in nomes
+    for m in montadas:
+        assert m.perfil is not None and len(m.pernas) >= 1
+    print("[OK] Caso 9: monta as estruturas da tese, com perfil de risco.")
+
+    # Caso 10: sem visao direcional, so' estruturas neutras em delta
+    neutras, _ = montar_estruturas(
+        cadeia_completa, spot=30.0, vencimento="2026-02-20",
+        tese_vol="barata", tese_direcao="neutra")
+    nomes_neutros = {m.nome for m in neutras}
+    assert "compra de straddle" in nomes_neutros
+    assert "compra de CALL" not in nomes_neutros   # carrega delta, exige visao
+    print("[OK] Caso 10: sem visao declarada, so' estruturas neutras em delta.")
+
+    # Caso 11: cadeia pobre recusa a estrutura E diz o motivo, sem silencio
+    cadeia_pobre = [
+        {"Codigo_Opcao": "C30", "Tipo": "CALL", "Strike": 30.0,
+         "Data_Vencimento": "2026-02-20", "Preco_Mercado": 1.80, "Liquidez": 500},
+    ]
+    poucas, motivos = montar_estruturas(
+        cadeia_pobre, spot=30.0, vencimento="2026-02-20",
+        tese_vol="barata", tese_direcao="alta")
+    assert any("trava de alta com calls" in m for m in motivos)
+    assert all(isinstance(m, str) and len(m) > 0 for m in motivos)
+    print("[OK] Caso 11: estrutura inviavel e' recusada com motivo explicito.")
+
+    # Caso 12: perna sem liquidez minima barra a estrutura
+    cadeia_ilquida = [dict(linha, Liquidez=1) for linha in cadeia_completa]
+    nenhuma, motivos_liq = montar_estruturas(
+        cadeia_ilquida, spot=30.0, vencimento="2026-02-20",
+        tese_vol="barata", tese_direcao="alta", liquidez_min=100)
+    assert nenhuma == []
+    assert any("liquidez" in m.lower() for m in motivos_liq)
+    print("[OK] Caso 12: perna abaixo da liquidez minima barra a estrutura.")
+
+    # Caso 13: venda coberta exige ter a acao. Sem posicao na carteira, a
+    # estrutura nao e' oferecida - vender call sem ter o papel e' venda
+    # descoberta, perfil de risco completamente diferente do que o nome sugere.
+    sem_posicao, motivos_pos = montar_estruturas(
+        cadeia_completa, spot=30.0, vencimento="2026-02-20",
+        tese_vol="cara", tese_direcao="baixa", tem_posicao=False)
+    assert "venda coberta de CALL" not in {m.nome for m in sem_posicao}
+    assert any("posicao" in m.lower() for m in motivos_pos)
+
+    com_posicao, _ = montar_estruturas(
+        cadeia_completa, spot=30.0, vencimento="2026-02-20",
+        tese_vol="cara", tese_direcao="baixa", tem_posicao=True)
+    assert "venda coberta de CALL" in {m.nome for m in com_posicao}
+    print("[OK] Caso 13: venda coberta so' aparece com posicao na carteira.")
 
     print("\nTodos os casos passaram.")
