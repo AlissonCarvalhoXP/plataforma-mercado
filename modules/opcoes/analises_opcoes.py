@@ -199,7 +199,7 @@ def analisar(underlying: dict, series: list[dict], selic: float,
     r = selic
 
     calculados = []
-    pontos_por_tipo: dict[str, list[tuple[float, float]]] = {"CALL": [], "PUT": []}
+    pontos_por_chave: dict[tuple[str, str], list[tuple[float, float]]] = {}
     for s in series:
         venc = date.fromisoformat(s["Data_Vencimento"][:10])
         dias_corridos = max(1, (venc - hoje).days)
@@ -217,18 +217,25 @@ def analisar(underlying: dict, series: list[dict], selic: float,
         if liq < liquidez_min:
             continue
 
-        calculados.append((s, mkt, tipo, dias_corridos, T, iv, liq))
-        pontos_por_tipo.setdefault(tipo, []).append((s["Strike"], iv))
+        chave_sorriso = (tipo, s["Data_Vencimento"][:10])
+        calculados.append((s, mkt, tipo, dias_corridos, T, iv, liq, chave_sorriso))
+        pontos_por_chave.setdefault(chave_sorriso, []).append((s["Strike"], iv))
 
-    sorrisos = {tipo: ajustar_sorriso(pontos) for tipo, pontos in pontos_por_tipo.items()}
+    # Sorriso por (Tipo, Vencimento), NAO so' por Tipo: a superficie de vol tem
+    # estrutura a termo, entao juntar prazos diferentes na mesma parabola faz o
+    # Skew_pp medir diferenca de PRAZO em vez de desvio de STRIKE. Verificado
+    # com dado sintetico (Caso 20): com a chave errada, uma serie curta com IV
+    # 20pp acima da longa aparecia com Skew de 10pp que era puro prazo.
+    sorrisos = {chave: ajustar_sorriso(pontos)
+                for chave, pontos in pontos_por_chave.items()}
 
     out: list[LinhaRanking] = []
-    for s, mkt, tipo, dias_corridos, T, iv, liq in calculados:
+    for s, mkt, tipo, dias_corridos, T, iv, liq, chave_sorriso in calculados:
         justo, delta = bs_price_delta(tipo, S, s["Strike"], T, r, HV)
         desconto = (justo - mkt) / justo if justo > 0 else 0.0
         diff = (iv - HV) * 100
 
-        sorriso = sorrisos.get(tipo)
+        sorriso = sorrisos.get(chave_sorriso)
         iv_esperada = sorriso(s["Strike"]) if sorriso else None
         skew = (iv - iv_esperada) * 100 if iv_esperada is not None else 0.0
 
@@ -608,5 +615,30 @@ if __name__ == "__main__":
     assert "acima" in texto_gerado.lower() or "abaixo" in texto_gerado.lower()
     assert "PETRA300" in texto_gerado
     print("[OK] Caso 19: texto descreve desvio observado, sem vocabulario de previsao.")
+
+    # Caso 20: o sorriso e' ajustado por (Tipo, Vencimento), nao so' por Tipo.
+    # A superficie de vol tem estrutura a termo: uma serie de 7 dias e outra de
+    # 90 tem niveis de IV sistematicamente diferentes. Juntando as duas na mesma
+    # parabola, parte do Skew_pp passa a medir diferenca de PRAZO em vez de
+    # desvio de STRIKE - que e' o que ele deveria medir.
+    hoje_teste = date(2026, 1, 5)
+    underlying_prazo = {"Spot": 30.0, "HV_60d": 0.30}
+    series_prazo = []
+    for strike, iv in ((28.0, 0.50), (30.0, 0.48), (32.0, 0.49), (34.0, 0.52)):
+        series_prazo.append({"Codigo_Opcao": f"CURTA{strike:.0f}", "Tipo": "CALL",
+                             "Strike": strike, "Data_Vencimento": "2026-01-16",
+                             "Ultimo": 1.20, "IV_Fonte": iv, "Volume": 100})
+    for strike, iv in ((28.0, 0.30), (30.0, 0.28), (32.0, 0.29), (34.0, 0.32)):
+        series_prazo.append({"Codigo_Opcao": f"LONGA{strike:.0f}", "Tipo": "CALL",
+                             "Strike": strike, "Data_Vencimento": "2026-04-17",
+                             "Ultimo": 2.50, "IV_Fonte": iv, "Volume": 100})
+
+    ranking_prazo = analisar(underlying_prazo, series_prazo, selic=0.12, hoje=hoje_teste)
+    # Cada serie e' comparada ao sorriso do SEU vencimento, entao o Skew fica
+    # pequeno nos dois grupos. Com a chave errada (so' Tipo), o grupo curto
+    # apareceria ~10pp acima e o longo ~10pp abaixo de um sorriso medio.
+    for linha in ranking_prazo:
+        assert abs(linha["Skew_pp"]) < 5.0, (linha["Codigo_Opcao"], linha["Skew_pp"])
+    print("[OK] Caso 20: sorriso por (Tipo, Vencimento) - nao mistura prazos.")
 
     print("\nTodos os casos passaram.")
