@@ -284,6 +284,61 @@ da pontuação, que é a única parte dependente dos pesos — o sweep recalcula
 vezes. Caso 4 do auto-teste trava a equivalência entre o score vetorizado e o
 `calcular_score()` do screener ao vivo.
 
+### ❌ 4.4d REPROVADO NO GATE (2026-09-02) — modelo de cenários automáticos por FHS
+
+Tentativa de substituir a declaração manual de cenários por um modelo
+estatístico (Filtered Historical Simulation sobre EWMA). **O modelo não passou
+na avaliação de calibração e NÃO foi para produção** — a declaração manual
+permanece.
+
+**O desenho previa esse desfecho.** A spec
+(`docs/superpowers/specs/2026-09-02-cenarios-automaticos-fhs-design.md`, seção
+5.5) colocava a avaliação ANTES da integração justamente para que um modelo mal
+calibrado fosse descoberto antes de virar tela. Foi o que aconteceu.
+
+**Resultado do walk-forward** (janelas não sobrepostas, horizonte 45 dias
+úteis, 501 pregões por ativo, cada previsão usando somente dados até a data):
+
+| Ativo | Janelas | CRPS modelo | CRPS benchmark | Ganho |
+|---|---|---|---|---|
+| PETR | 5 | 1,2259 | 1,2675 | **+3,3%** |
+| VALE | 5 | 2,4276 | 2,1070 | −15,2% |
+| ITUB | 5 | 1,4061 | 1,3415 | −4,8% |
+| BBDC | 5 | 11,6957 | 0,9361 | **−1149,4%** |
+| BBAS | — | recusado pela guarda de salto (51% num pregão) | | |
+
+**Agregado: −196,4%**, dominado inteiramente pelo BBDC. **Excluindo BBDC:
+−7,3%** (modelo 1,6865 vs benchmark 1,5720). Reprovado nos dois recortes — dois
+de três ativos restantes perdem para o benchmark.
+
+**O que o BBDC revelou:** sua série tem 2 saltos acima de 15% (máximo 15,9%:
+R$16,60 → R$13,96), quase certamente bonificação ou desdobramento, não
+movimento de mercado. Eles passaram pela guarda de `SALTO_MAXIMO = 0.35`, que
+foi calibrada para o caso extremo do MGLU (+896%). Como o EWMA com λ=0,94 é
+muito reativo, uma janela iniciada logo após esse salto produz distribuição
+absurdamente larga e CRPS catastrófico.
+
+**Achado que vale para além deste modelo:** a guarda de 35% é frouxa demais
+para eventos societários comuns, que ficam na faixa de 10-20%. Qualquer trabalho
+futuro sobre esta base precisa de ajuste de proventos de verdade, não de um
+filtro de salto — limitação já registrada em 4.4c e agora confirmada com custo
+concreto.
+
+**O que passou:** a uniformidade do PIT **não foi rejeitada** (p = 0,235). Ou
+seja, a *forma* da distribuição prevista é compatível com a realizada; o modelo
+falha em ser mais *afiado* que o benchmark, não em ser enviesado.
+
+**Conclusão honesta:** prever a largura da distribuição com EWMA sobre 501
+pregões não bate a distribuição empírica incondicional nos ativos testados.
+Volatilidade é previsível em princípio, mas a vantagem não sobreviveu à
+medição — nem com dados sujos por eventos societários, nem sem eles.
+
+**O que fica construído e utilizável:** `modelo_cenarios.py` (EWMA, FHS,
+resumo em cenários, guardas) e `avaliacao_previsoes.py` (PIT, CRPS,
+walk-forward, benchmark) permanecem no repositório, testados. A infraestrutura
+de avaliação serve para qualquer modelo futuro — é o gate, não o modelo, que é
+o ativo duradouro aqui.
+
 ### 4.5 Correção aplicada (2026-08-30) — piso de preço relevante
 
 Opções negociando abaixo de `PRECO_MINIMO_RELEVANTE = 0.05` (residuais de fim de vida,

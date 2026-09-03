@@ -206,6 +206,20 @@ def list_existing_tables(db_path: str | Path | None = None) -> list[str]:
     return [r[0] for r in rows]
 
 
+def carregar_precos(ativo: str, db_path: str | Path | None = None) -> list[float]:
+    """Serie de preco diario do ativo-objeto, a partir do historico COTAHIST."""
+    con = _conn(db_path)
+    try:
+        linhas = con.execute("""
+            SELECT Data, MAX(Preco_Ativo) FROM opcoes_historico
+            WHERE Ativo_Objeto = ? AND Preco_Ativo > 0
+            GROUP BY Data ORDER BY Data
+        """, (ativo,)).fetchall()
+    finally:
+        con.close()
+    return [float(v) for _data, v in linhas]
+
+
 if __name__ == "__main__":
     import tempfile, os as _os
 
