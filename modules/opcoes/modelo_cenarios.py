@@ -75,7 +75,13 @@ def simular_fhs(retornos, spot: float, horizonte: int, taxa: float,
     e a secao 3.3 da spec."""
     rng = np.random.default_rng(semente)
     z, vol = residuos_padronizados(retornos, lam)
-    var_inicial = float(vol[-1] ** 2)
+    r_demediado = np.asarray(retornos, dtype=float)
+    r_demediado = r_demediado - r_demediado.mean()
+    # Um passo extra da recursao: vol[-1] por construcao NAO incorpora
+    # retornos[-1] (ver volatilidade_ewma). Sem este passo, a simulacao
+    # arrancaria ignorando o dado mais recente - justo o oposto do que o
+    # clustering do EWMA promete.
+    var_inicial = float(lam * vol[-1] ** 2 + (1 - lam) * r_demediado[-1] ** 2)
 
     # Vetorizado ao longo das simulacoes: o laco corre o horizonte (dezenas de
     # passos), nao as simulacoes (milhares). A recursao de vol e' dependente do
@@ -163,5 +169,18 @@ if __name__ == "__main__":
                                 n_simulacoes=20000, semente=11)
     assert skew(np.log(precos_assim / 100.0)) < -0.3
     print("[OK] Caso 5: FHS preserva a assimetria real, nao assume normal.")
+
+    # Caso 6: a semente da simulacao incorpora o retorno MAIS RECENTE.
+    # vol[-1] por construcao nao o inclui; sem o passo extra da recursao, uma
+    # serie que termina em choque geraria a mesma distribuicao de uma serie
+    # calma - e o clustering do EWMA nao estaria sendo usado.
+    calma = list(rng.normal(0.0, 0.01, 400))
+    com_choque = list(calma[:-1]) + [0.20]
+    largura_calma = np.std(simular_fhs(calma, 100.0, 5, 0.0,
+                                        n_simulacoes=4000, semente=13))
+    largura_choque = np.std(simular_fhs(com_choque, 100.0, 5, 0.0,
+                                         n_simulacoes=4000, semente=13))
+    assert largura_choque > 1.5 * largura_calma, (largura_calma, largura_choque)
+    print("[OK] Caso 6: semente da simulacao incorpora o retorno mais recente.")
 
     print("\nTodos os casos passaram.")
