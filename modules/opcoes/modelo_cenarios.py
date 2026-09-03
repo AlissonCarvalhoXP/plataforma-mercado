@@ -44,6 +44,59 @@ def volatilidade_ewma(retornos, lam: float = LAMBDA_EWMA) -> np.ndarray:
     return np.sqrt(var)
 
 
+def residuos_padronizados(retornos, lam: float = LAMBDA_EWMA):
+    """Retornos DE-MEDIADOS divididos pela volatilidade condicional.
+
+    De-mediar e' critico e nao e' detalhe: sem isso, os residuos carregam o
+    drift do periodo amostral, a simulacao o herda, e o modelo passa a prever
+    direcao a partir de retorno passado. Retorno esperado e' notoriamente
+    dificil de estimar - drift de 2 anos e' ruido.
+
+    Devolve (residuos, serie_de_vol)."""
+    r = np.asarray(retornos, dtype=float)
+    r = r - r.mean()
+    vol = volatilidade_ewma(r, lam)
+    return r / np.maximum(vol, 1e-12), vol
+
+
+def simular_fhs(retornos, spot: float, horizonte: int, taxa: float,
+                 n_simulacoes: int = 10000, lam: float = LAMBDA_EWMA,
+                 semente: int | None = None) -> np.ndarray:
+    """Filtered Historical Simulation: devolve os precos terminais simulados.
+
+    Procedimento: filtra os retornos pelo EWMA, extrai os residuos
+    padronizados (que carregam cauda gorda e assimetria REAIS do ativo, sem
+    assumir distribuicao), sorteia esses residuos com reposicao ao longo do
+    horizonte reescalando pela volatilidade prevista, e recentra o resultado
+    no preco a termo.
+
+    A recentragem no termo (spot * exp(taxa * horizonte/252)) e' o que impede
+    o drift historico de virar previsao de direcao - ver residuos_padronizados
+    e a secao 3.3 da spec."""
+    rng = np.random.default_rng(semente)
+    z, vol = residuos_padronizados(retornos, lam)
+    var_inicial = float(vol[-1] ** 2)
+
+    # Vetorizado ao longo das simulacoes: o laco corre o horizonte (dezenas de
+    # passos), nao as simulacoes (milhares). A recursao de vol e' dependente do
+    # caminho, entao precisa ser iterada - mas todas as trajetorias avancam
+    # juntas.
+    var = np.full(n_simulacoes, var_inicial, dtype=float)
+    soma_retornos = np.zeros(n_simulacoes, dtype=float)
+    for _ in range(horizonte):
+        choques = z[rng.integers(0, len(z), n_simulacoes)]
+        retorno_passo = np.sqrt(var) * choques
+        soma_retornos += retorno_passo
+        var = lam * var + (1 - lam) * retorno_passo ** 2
+
+    precos = spot * np.exp(soma_retornos)
+
+    # Recentra a MEDIA no preco a termo (condicao de martingale sob a medida a
+    # termo). O modelo entrega largura e forma; o centro vem de nao-arbitragem.
+    termo = spot * math.exp(taxa * horizonte / DIAS_UTEIS_ANO)
+    return precos * (termo / precos.mean())
+
+
 if __name__ == "__main__":
     import numpy as np
 
@@ -66,5 +119,49 @@ if __name__ == "__main__":
     vol_alterado = volatilidade_ewma(retornos_alterado)
     assert np.allclose(vol, vol_alterado)
     print("[OK] Caso 2: EWMA nao olha o futuro (ultimo retorno nao afeta a serie).")
+
+    # Caso 3: ESTE E' O TESTE MAIS IMPORTANTE DO MODULO.
+    # Com retornos de drift forte, a distribuicao simulada tem que ficar
+    # centrada no PRECO A TERMO, nao no preco extrapolado pelo drift. Sem
+    # de-mediar os retornos, a simulacao herdaria o drift amostral e estaria
+    # prevendo DIRECAO a partir de retorno passado - exatamente a armadilha
+    # que este design existe para evitar (secao 3.3 da spec).
+    drift_diario = 0.005
+    retornos_drift = drift_diario + rng.normal(0.0, 0.01, 500)
+    spot_teste, horizonte_teste, taxa_teste = 100.0, 45, 0.0
+    precos = simular_fhs(retornos_drift, spot_teste, horizonte_teste,
+                          taxa_teste, n_simulacoes=5000, semente=7)
+    termo = spot_teste * math.exp(taxa_teste * horizonte_teste / DIAS_UTEIS_ANO)
+    assert abs(precos.mean() - termo) < 0.01 * termo
+    # extrapolar o drift daria ~100*exp(0.005*45) = 125; tem que estar longe disso
+    preco_se_extrapolasse_drift = spot_teste * math.exp(drift_diario * horizonte_teste)
+    assert precos.mean() < 0.9 * preco_se_extrapolasse_drift
+    print("[OK] Caso 3: distribuicao recentrada no termo - drift historico nao vaza.")
+
+    # Caso 4: a taxa entra pelo termo (juro maior desloca o centro pra cima)
+    precos_juro = simular_fhs(retornos_drift, spot_teste, horizonte_teste,
+                               taxa=0.12, n_simulacoes=5000, semente=7)
+    termo_juro = spot_teste * math.exp(0.12 * horizonte_teste / DIAS_UTEIS_ANO)
+    assert abs(precos_juro.mean() - termo_juro) < 0.01 * termo_juro
+    assert precos_juro.mean() > precos.mean()
+    print("[OK] Caso 4: o centro da distribuicao e' o preco a termo, com juro.")
+
+    # Caso 5: FHS preserva a assimetria dos residuos (nao assume normal).
+    # Horizonte 1 preserva mais - agregar horizonte encolhe assimetria (TCL).
+    # A serie e' embaralhada com o rng semeado antes de usar: sem isso, os 900
+    # ganhos positivos vem antes das 100 quedas grandes, e o EWMA sobe durante
+    # as quedas - dividindo os choques negativos por vol alta e encolhendo a
+    # assimetria dos residuos por artefato de ordenacao, nao por defeito do
+    # modelo.
+    from scipy.stats import skew
+    choques_assimetricos = np.concatenate([
+        rng.normal(0.005, 0.005, 900),      # muitos ganhos pequenos
+        rng.normal(-0.06, 0.02, 100),       # poucas quedas grandes
+    ])
+    rng.shuffle(choques_assimetricos)
+    precos_assim = simular_fhs(choques_assimetricos, 100.0, 1, 0.0,
+                                n_simulacoes=20000, semente=11)
+    assert skew(np.log(precos_assim / 100.0)) < -0.3
+    print("[OK] Caso 5: FHS preserva a assimetria real, nao assume normal.")
 
     print("\nTodos os casos passaram.")
