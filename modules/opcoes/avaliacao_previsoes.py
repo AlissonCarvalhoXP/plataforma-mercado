@@ -17,6 +17,11 @@ real-world estar correta nao diz que a neutra ao risco esta' errada.
 """
 from __future__ import annotations
 import numpy as np
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import math
+from scipy.stats import kstest
+import modelo_cenarios as mc
 
 
 def pit(previsao_simulada, realizado: float) -> float:
@@ -51,6 +56,96 @@ def crps(previsao_simulada, realizado: float) -> float:
     dispersao = float(2.0 * np.sum((2 * indices - n - 1) * ordenada) / (n * n))
 
     return termo_acerto - 0.5 * dispersao
+
+
+def simular_incondicional(retornos, spot: float, horizonte: int, taxa: float,
+                           n_simulacoes: int = 10000,
+                           semente: int | None = None) -> np.ndarray:
+    """Benchmark: distribuicao empirica INCONDICIONAL.
+
+    Mesmo horizonte e mesma recentragem no termo que o FHS, mas SEM modelo de
+    volatilidade - apenas bootstrap dos retornos de-mediados. Isola exatamente
+    a contribuicao do EWMA: se o FHS nao vencer isso, o modelo de vol nao esta'
+    agregando e a complexidade nao se justifica."""
+    rng = np.random.default_rng(semente)
+    r = np.asarray(retornos, dtype=float)
+    r = r - r.mean()
+    sorteados = r[rng.integers(0, len(r), (n_simulacoes, horizonte))]
+    precos = spot * np.exp(sorteados.sum(axis=1))
+    termo = spot * math.exp(taxa * horizonte / mc.DIAS_UTEIS_ANO)
+    return precos * (termo / precos.mean())
+
+
+def walk_forward(precos, horizonte: int, taxa: float,
+                  janela_minima: int = mc.MINIMO_PREGOES,
+                  n_simulacoes: int = 4000,
+                  semente: int | None = None) -> list[dict]:
+    """Avalia o modelo em janelas NAO SOBREPOSTAS, usando em cada data apenas
+    informacao disponivel ate' ali.
+
+    Janelas nao sobrepostas porque previsoes em datas consecutivas com
+    horizonte h compartilham periodo e nao sao independentes - trata-las como
+    independentes inflaria a confianca nas metricas. O custo e' ter poucas
+    janelas (com h=45 e 501 pregoes, ~5 por ativo), e por isso resumir_avaliacao
+    sempre reporta quantas foram."""
+    p = np.asarray(precos, dtype=float)
+    resultados: list[dict] = []
+    indice = janela_minima
+    while indice + horizonte < len(p):
+        historico = p[:indice + 1]                 # so' ate' a data da previsao
+        retornos = mc.retornos_log(historico)
+        spot = float(historico[-1])
+        realizado = float(p[indice + horizonte])
+
+        previsao_modelo = mc.simular_fhs(retornos, spot, horizonte, taxa,
+                                          n_simulacoes=n_simulacoes, semente=semente)
+        previsao_bench = simular_incondicional(retornos, spot, horizonte, taxa,
+                                                n_simulacoes=n_simulacoes, semente=semente)
+        resultados.append({
+            "indice": indice,
+            "realizado": realizado,
+            "pit_modelo": pit(previsao_modelo, realizado),
+            "crps_modelo": crps(previsao_modelo, realizado),
+            "pit_benchmark": pit(previsao_bench, realizado),
+            "crps_benchmark": crps(previsao_bench, realizado),
+        })
+        indice += horizonte                        # sem sobreposicao
+    return resultados
+
+
+def resumir_avaliacao(resultados: list[dict]) -> dict:
+    """Consolida o walk-forward num veredito legivel.
+
+    CRPS sozinho nao diz se o modelo e' bom - so' compara. Por isso o veredito
+    e' sempre relativo ao benchmark incondicional, e sempre acompanhado do
+    numero de janelas em que se baseia."""
+    if not resultados:
+        return {"n_janelas": 0, "crps_modelo": None, "crps_benchmark": None,
+                "ganho_percentual": None, "pit_ks_valor_p": None,
+                "veredito": "sem janelas suficientes para avaliar"}
+
+    crps_modelo = float(np.mean([r["crps_modelo"] for r in resultados]))
+    crps_bench = float(np.mean([r["crps_benchmark"] for r in resultados]))
+    ganho = (crps_bench - crps_modelo) / crps_bench * 100 if crps_bench else 0.0
+
+    valores_pit = [r["pit_modelo"] for r in resultados]
+    valor_p = float(kstest(valores_pit, "uniform").pvalue) if len(valores_pit) >= 3 else None
+
+    partes = []
+    partes.append(f"CRPS do modelo {crps_modelo:.4f} vs. benchmark {crps_bench:.4f} "
+                  f"({ganho:+.1f}%)")
+    if ganho <= 0:
+        partes.append("o modelo de volatilidade NAO venceu o benchmark incondicional")
+    if valor_p is not None:
+        partes.append(f"uniformidade do PIT: p={valor_p:.3f}"
+                      + (" (calibracao rejeitada)" if valor_p < 0.05 else ""))
+    if len(resultados) < 8:
+        partes.append(f"ATENCAO: apenas {len(resultados)} janelas independentes - "
+                      "amostra insuficiente para conclusao firme")
+
+    return {"n_janelas": len(resultados), "crps_modelo": crps_modelo,
+            "crps_benchmark": crps_bench, "ganho_percentual": ganho,
+            "pit_ks_valor_p": valor_p, "veredito": "; ".join(partes)}
 
 
 if __name__ == "__main__":
@@ -101,5 +196,51 @@ if __name__ == "__main__":
     torta = rng.normal(15.0, 1.0, 5000)
     assert crps(certeira, 10.0) < crps(torta, 10.0)
     print("[OK] Caso 4: CRPS premia a previsao mais proxima do realizado.")
+
+    # Caso 5: as janelas do walk-forward NAO se sobrepoem. Previsoes em datas
+    # consecutivas com horizonte h compartilham periodo e nao sao
+    # independentes - usa-las infla a confianca nas metricas.
+    precos_teste = list(100.0 * np.exp(np.cumsum(rng.normal(0.0, 0.015, 500))))
+    resultados = walk_forward(precos_teste, horizonte=45, taxa=0.10,
+                               n_simulacoes=800, semente=5)
+    indices = [r["indice"] for r in resultados]
+    assert all(indices[i + 1] - indices[i] >= 45 for i in range(len(indices) - 1))
+    # 500 pregoes, janela minima 250, horizonte 45 -> poucas janelas mesmo
+    assert 3 <= len(resultados) <= 8, len(resultados)
+    print(f"[OK] Caso 5: walk-forward usa {len(resultados)} janelas nao sobrepostas.")
+
+    # Caso 6: NAO OLHA O FUTURO. Alterar os precos DEPOIS da ultima janela
+    # avaliada nao pode mudar nenhuma previsao ja feita. Sem isso, toda a
+    # avaliacao seria contaminada e diria que o modelo e' melhor do que e'.
+    precos_alterados = list(precos_teste)
+    ultimo_indice = max(indices)
+    for i in range(ultimo_indice + 46, len(precos_alterados)):
+        precos_alterados[i] = precos_alterados[i] * 3.0
+    resultados_alterados = walk_forward(precos_alterados, horizonte=45, taxa=0.10,
+                                         n_simulacoes=800, semente=5)
+    for antes, depois in zip(resultados, resultados_alterados):
+        assert abs(antes["crps_modelo"] - depois["crps_modelo"]) < 1e-9
+    print("[OK] Caso 6: walk-forward nao olha o futuro (dados posteriores nao afetam).")
+
+    # Caso 7: o benchmark incondicional tambem e' recentrado no termo - a
+    # comparacao tem que isolar o MODELO DE VOL, nao premiar o FHS por um
+    # detalhe de centragem que o benchmark nao teria.
+    import os, sys
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import modelo_cenarios as mc
+    retornos_bench = mc.retornos_log(precos_teste)
+    amostra_bench = simular_incondicional(retornos_bench, 100.0, 45, 0.0,
+                                           n_simulacoes=5000, semente=9)
+    assert abs(amostra_bench.mean() - 100.0) < 1.0
+    print("[OK] Caso 7: benchmark incondicional tambem recentrado no termo.")
+
+    # Caso 8: o resumo reporta o numero de janelas e avisa quando sao poucas
+    resumo = resumir_avaliacao(resultados)
+    assert resumo["n_janelas"] == len(resultados)
+    assert "crps_modelo" in resumo and "crps_benchmark" in resumo
+    assert isinstance(resumo["veredito"], str) and len(resumo["veredito"]) > 0
+    if resumo["n_janelas"] < 8:
+        assert "amostra" in resumo["veredito"].lower()
+    print("[OK] Caso 8: resumo reporta n de janelas e avisa amostra insuficiente.")
 
     print("\nTodos os casos passaram.")
