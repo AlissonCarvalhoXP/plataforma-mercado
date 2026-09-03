@@ -20,6 +20,8 @@ import numpy as np
 
 LAMBDA_EWMA = 0.94      # RiskMetrics, para dados diarios
 DIAS_UTEIS_ANO = 252
+MINIMO_PREGOES = 250
+SALTO_MAXIMO = 0.35     # variacao em um pregao acima disso = provavel evento societario
 
 
 def volatilidade_ewma(retornos, lam: float = LAMBDA_EWMA) -> np.ndarray:
@@ -130,6 +132,33 @@ def resumir_em_cenarios(precos_simulados) -> list[dict]:
     ]
 
 
+def retornos_log(precos) -> np.ndarray:
+    """Retornos logaritmicos diarios a partir da serie de precos."""
+    p = np.asarray(precos, dtype=float)
+    return np.diff(np.log(p))
+
+
+def validar_serie(precos) -> str | None:
+    """Devolve o motivo da recusa, ou None se a serie serve para o modelo.
+
+    Recusa em vez de produzir estimativa ruim silenciosamente - mesmo principio
+    das recusas de distribuicao_opcoes.py."""
+    p = np.asarray(precos, dtype=float)
+    if len(p) < MINIMO_PREGOES:
+        return (f"serie curta demais: {len(p)} pregoes, minimo {MINIMO_PREGOES} "
+                f"para estimar volatilidade e extrair residuos")
+    if np.any(p <= 0):
+        return "serie contem preco zero ou negativo"
+
+    variacoes = np.abs(np.diff(p) / p[:-1])
+    if np.any(variacoes > SALTO_MAXIMO):
+        indice = int(np.argmax(variacoes))
+        return (f"salto de {variacoes[indice]:.0%} em um pregao (de {p[indice]:.2f} "
+                f"para {p[indice + 1]:.2f}) - provavel evento societario nao "
+                f"ajustado; o COTAHIST traz preco bruto")
+    return None
+
+
 if __name__ == "__main__":
     import numpy as np
 
@@ -230,5 +259,26 @@ if __name__ == "__main__":
     assert abs(cenarios[1]["Probabilidade"] - 0.50) < 0.01
     assert abs(cenarios[2]["Probabilidade"] - 0.25) < 0.01
     print("[OK] Caso 8: cortes em 25%/75% dao 25/50/25, com precos ordenados.")
+
+    # Caso 9: serie curta demais e' recusada com motivo, nao produz modelo ruim
+    curta = list(np.linspace(30.0, 32.0, 100))
+    motivo = validar_serie(curta)
+    assert motivo is not None and "pregoes" in motivo.lower()
+    print("[OK] Caso 9: serie com menos de 250 pregoes e' recusada com motivo.")
+
+    # Caso 10: salto de evento societario e' detectado. O COTAHIST traz preco
+    # BRUTO, sem ajuste - o grupamento do MGLU foi de R$1,32 para R$13,15 num
+    # pregao (+896%). Sem esta guarda, o modelo leria isso como volatilidade.
+    com_grupamento = [10.0] * 300
+    com_grupamento[150] = 100.0   # salto de +900%
+    motivo_salto = validar_serie(com_grupamento)
+    assert motivo_salto is not None and "salto" in motivo_salto.lower()
+    print("[OK] Caso 10: salto de evento societario e' detectado e recusado.")
+
+    # Caso 11: serie boa passa, e os retornos log saem com o tamanho certo
+    boa = list(100.0 * np.exp(np.cumsum(rng.normal(0.0, 0.015, 400))))
+    assert validar_serie(boa) is None
+    assert len(retornos_log(boa)) == len(boa) - 1
+    print("[OK] Caso 11: serie valida passa e produz retornos log.")
 
     print("\nTodos os casos passaram.")
