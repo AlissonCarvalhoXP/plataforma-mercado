@@ -48,6 +48,31 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
     liq_min = c2.number_input("Liquidez mínima (vol+OI)", 0, step=1000, value=5000)
     peso_diff = c3.slider("Peso do Diff no score", 0.0, 1.5, 0.6, 0.1)
 
+    # Coleta sob demanda. A coleta tambem roda sozinha no atualizar.py (uma vez
+    # por dia); este botao existe para forcar quando voce quiser, sem esperar o
+    # agendamento. A fonte gratuita da brapi entrega dado de FECHAMENTO, entao
+    # apertar varias vezes no mesmo dia traz o mesmo numero - o valor esta' em
+    # coletar depois do pregao, ou quando a base ainda nao tem a foto de hoje.
+    if st.button("🔄 Atualizar cadeia agora", key="coletar_agora"):
+        import subprocess
+        from pathlib import Path as _Path
+        raiz = _Path(__file__).resolve().parents[2]
+        with st.spinner(f"Coletando cadeia de {ativo}..."):
+            resultado = subprocess.run(
+                [sys.executable, str(raiz / "modules" / "opcoes" / "coleta_opcoes.py"), ativo],
+                capture_output=True, text=True, cwd=str(raiz))
+        if resultado.returncode == 0:
+            st.success(f"Cadeia de {ativo} atualizada.")
+            st.rerun()
+        else:
+            # Mostra a saida real do coletor: sem isso a falha viraria um
+            # "nao funcionou" mudo, e a causa mais comum (token ausente para
+            # ativo fora do sandbox da brapi) fica invisivel.
+            st.error(f"A coleta de {ativo} falhou (codigo {resultado.returncode}).")
+            saida = (resultado.stderr or resultado.stdout or "").strip()
+            if saida:
+                st.code(saida[-1500:])
+
     und, series = db_opcoes.read_latest_chain(ativo, db_path)
     if not und or not series:
         st.warning(f"Sem dados para {ativo}.")
