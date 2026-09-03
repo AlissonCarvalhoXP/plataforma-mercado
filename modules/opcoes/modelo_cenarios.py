@@ -103,6 +103,33 @@ def simular_fhs(retornos, spot: float, horizonte: int, taxa: float,
     return precos * (termo / precos.mean())
 
 
+def resumir_em_cenarios(precos_simulados) -> list[dict]:
+    """Resume a distribuicao simulada em tres cenarios, no mesmo formato que a
+    UI e distribuicao_opcoes.py ja consomem.
+
+    O preco de cada cenario e' a MEDIA CONDICIONAL da sua regiao, nao o quantil
+    de corte. Isso torna o resumo coerente: a media ponderada dos tres pontos
+    recupera a media da distribuicao completa. Exibir o quantil 10% como "preco
+    do cenario de baixa" e ao mesmo tempo atribuir a ele a massa abaixo do
+    quantil 25% seria incoerente - o ponto nao representaria a regiao.
+
+    O resumo e' para EXIBICAO. O valor esperado das estruturas continua sendo
+    calculado sobre a distribuicao completa (ver secao 3.4 da spec)."""
+    p = np.asarray(precos_simulados, dtype=float)
+    q25, q75 = np.quantile(p, [0.25, 0.75])
+    regioes = (
+        ("baixa", p[p <= q25]),
+        ("base", p[(p > q25) & (p <= q75)]),
+        ("alta", p[p > q75]),
+    )
+    return [
+        {"Cenario": nome,
+         "Preco_Alvo": float(valores.mean()),
+         "Probabilidade": float(len(valores) / len(p))}
+        for nome, valores in regioes
+    ]
+
+
 if __name__ == "__main__":
     import numpy as np
 
@@ -182,5 +209,26 @@ if __name__ == "__main__":
                                          n_simulacoes=4000, semente=13))
     assert largura_choque > 1.5 * largura_calma, (largura_calma, largura_choque)
     print("[OK] Caso 6: semente da simulacao incorpora o retorno mais recente.")
+
+    # Caso 7: o resumo em tres cenarios e' COERENTE com a distribuicao.
+    # O preco de cada cenario e' a MEDIA CONDICIONAL da sua regiao, nao o
+    # quantil de corte - por isso a media ponderada dos tres recupera a media
+    # da distribuicao completa. Usar o quantil como preco quebraria isso: o
+    # ponto exibido nao representaria a regiao que ele resume.
+    amostra = simular_fhs(retornos_drift, 100.0, 45, 0.0,
+                           n_simulacoes=20000, semente=3)
+    cenarios = resumir_em_cenarios(amostra)
+    assert [c["Cenario"] for c in cenarios] == ["baixa", "base", "alta"]
+    assert abs(sum(c["Probabilidade"] for c in cenarios) - 1.0) < 1e-9
+    media_ponderada = sum(c["Preco_Alvo"] * c["Probabilidade"] for c in cenarios)
+    assert abs(media_ponderada - amostra.mean()) < 1e-6 * amostra.mean()
+    print("[OK] Caso 7: resumo por media condicional recupera a media da distribuicao.")
+
+    # Caso 8: ordenacao e proporcoes por construcao (cortes em 25% e 75%)
+    assert cenarios[0]["Preco_Alvo"] < cenarios[1]["Preco_Alvo"] < cenarios[2]["Preco_Alvo"]
+    assert abs(cenarios[0]["Probabilidade"] - 0.25) < 0.01
+    assert abs(cenarios[1]["Probabilidade"] - 0.50) < 0.01
+    assert abs(cenarios[2]["Probabilidade"] - 0.25) < 0.01
+    print("[OK] Caso 8: cortes em 25%/75% dao 25/50/25, com precos ordenados.")
 
     print("\nTodos os casos passaram.")
