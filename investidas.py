@@ -38,12 +38,45 @@ def criar_tabela_investidas():
         data_fato DATE,
         data_arquivamento DATE,
         data_coleta TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        categoria TEXT,
+        tipo TEXT,
         UNIQUE(cnpj, data_fato, fato_relevante)
     );
     """
     try:
         with engine.connect() as conn:
             conn.execute(text(criar_sql))
+            # ADITIVO: CREATE TABLE IF NOT EXISTS nao acrescenta coluna a uma
+            # tabela que ja existe. Sem isto, bancos criados antes destas
+            # colunas fariam o INSERT falhar - erro que so' aparece na hora de
+            # gravar, nao na de criar.
+            for coluna in ("categoria", "tipo"):
+                try:
+                    conn.execute(text(f"ALTER TABLE investidas ADD COLUMN {coluna} TEXT"))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()   # ja existe
+
+            # A UNIQUE original era (cnpj, data_fato, fato_relevante), desenhada
+            # quando a coleta era um placeholder que nunca rodou. Ela NAO
+            # corresponde a identidade do dado real: no IPE da CVM, documentos
+            # distintos compartilham assunto e data de referencia - os mapas de
+            # votacao da AGE e da AGO da mesma data, por exemplo. Medido: 9 de
+            # 50 comunicados da Itausa colidiam, e o lote inteiro era rejeitado.
+            # A chave natural e' o LINK, que carrega o numero de protocolo.
+            try:
+                conn.execute(text("ALTER TABLE investidas "
+                                  "DROP CONSTRAINT IF EXISTS "
+                                  "investidas_cnpj_data_fato_fato_relevante_key"))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+            try:
+                conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS "
+                                  "idx_investidas_link ON investidas (link_cvm)"))
+                conn.commit()
+            except Exception:
+                conn.rollback()
             conn.commit()
         print("[OK] Tabela 'investidas' criada ou ja existe.")
     except Exception as e:
@@ -213,6 +246,153 @@ def categorias_disponiveis(noticias):
         return []
     valores = noticias["categoria"].dropna().astype(str).str.strip()
     return sorted({v for v in valores if v and v.lower() != "nan"})
+
+
+def criar_tabela_companhias_cvm():
+    """Cadastro de companhias abertas ATIVAS, espelho local do arquivo da CVM.
+
+    Existe para a tela poder oferecer candidatas na hora de vincular uma
+    empresa monitorada ao seu CNPJ - a desambiguacao que transforma casamento
+    por nome (traicoeiro: "VALE" traz empresas agricolas) em casamento por
+    CNPJ (exato)."""
+    criar_sql = """
+    CREATE TABLE IF NOT EXISTS cvm_companhias (
+        cnpj TEXT PRIMARY KEY,
+        cnpj_formatado TEXT,
+        denom_social TEXT,
+        denom_comerc TEXT,
+        setor TEXT,
+        codigo_cvm TEXT
+    );
+    """
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(criar_sql))
+            conn.commit()
+    except Exception as e:
+        print(f"[ERRO] Falha ao criar tabela cvm_companhias: {e}")
+
+
+def gravar_companhias_cvm(companhias):
+    """Substitui o espelho local do cadastro (a CVM republica o arquivo inteiro)."""
+    criar_tabela_companhias_cvm()
+    try:
+        companhias.to_sql("cvm_companhias", engine, if_exists="replace", index=False)
+        return len(companhias)
+    except Exception as e:
+        print(f"[ERRO] Falha ao gravar companhias: {e}")
+        return 0
+
+
+def buscar_companhias_cvm(termo):
+    """Companhias ativas cujo nome contem o termo - candidatas para vinculo."""
+    termo = (termo or "").strip()
+    if not termo:
+        return pd.DataFrame(columns=["cnpj", "denom_social", "denom_comerc", "setor"])
+    try:
+        return pd.read_sql(
+            text("""
+                SELECT cnpj, cnpj_formatado, denom_social, denom_comerc, setor
+                FROM cvm_companhias
+                WHERE UPPER(denom_social) LIKE UPPER(:p)
+                   OR UPPER(COALESCE(denom_comerc, '')) LIKE UPPER(:p)
+                ORDER BY denom_social
+                LIMIT 25
+            """),
+            engine, params={"p": f"%{termo}%"},
+        )
+    except Exception as e:
+        print(f"[ERRO] Falha ao buscar companhias: {e}")
+        return pd.DataFrame(columns=["cnpj", "denom_social", "denom_comerc", "setor"])
+
+
+def cnpjs_monitorados():
+    """CNPJs (so' digitos) das empresas monitoradas que ja tem vinculo.
+
+    Empresa cadastrada sem CNPJ fica de fora de proposito: adivinhar o vinculo
+    por nome traria a empresa errada ("Itau" casa com "Companhia Itaunense"),
+    e coletar comunicado da empresa errada e' pior que nao coletar."""
+    try:
+        df = pd.read_sql("SELECT cnpj FROM empresas_interesse WHERE ativa = TRUE", engine)
+    except Exception:
+        return []
+    saida = []
+    for valor in df.get("cnpj", []):
+        digitos = "".join(c for c in str(valor or "") if c.isdigit())
+        if len(digitos) == 14:
+            saida.append(digitos)
+    return sorted(set(saida))
+
+
+def empresas_sem_vinculo():
+    """Empresas monitoradas que ainda nao tem CNPJ valido vinculado.
+
+    A tela usa isto para mostrar o que esta' pendente, em vez de simplesmente
+    nao trazer comunicado nenhum e deixar o usuario sem saber por que."""
+    try:
+        df = pd.read_sql("SELECT nome_empresa, cnpj FROM empresas_interesse WHERE ativa = TRUE", engine)
+    except Exception:
+        return []
+    pendentes = []
+    for _, linha in df.iterrows():
+        digitos = "".join(c for c in str(linha.get("cnpj") or "") if c.isdigit())
+        if len(digitos) != 14:
+            pendentes.append(str(linha.get("nome_empresa") or ""))
+    return [p for p in pendentes if p]
+
+
+def gravar_comunicados(comunicados):
+    """Grava os comunicados novos em `investidas` (idempotente pelo protocolo).
+
+    Devolve quantos entraram. A CVM republica o arquivo do ano inteiro a cada
+    coleta, entao a maioria ja estara' no banco - so' o que e' novo importa."""
+    if comunicados is None or len(comunicados) == 0:
+        return 0
+    criar_tabela_investidas()
+    linhas = pd.DataFrame({
+        "cnpj": comunicados["CNPJ_Companhia"],
+        "nome_empresa": comunicados["Nome_Companhia"],
+        "fato_relevante": comunicados["Assunto"],
+        "link_cvm": comunicados["Link_Download"],
+        "data_fato": pd.to_datetime(comunicados["Data_Referencia"], errors="coerce"),
+        "data_arquivamento": pd.to_datetime(comunicados["Data_Entrega"], errors="coerce"),
+        "categoria": comunicados["Categoria"],
+        "tipo": comunicados.get("Tipo"),
+    })
+    try:
+        existentes = pd.read_sql("SELECT link_cvm FROM investidas", engine)
+        ja_temos = set(existentes["link_cvm"].dropna())
+    except Exception:
+        ja_temos = set()
+    novos = linhas[~linhas["link_cvm"].isin(ja_temos)]
+    if novos.empty:
+        return 0
+    try:
+        novos.to_sql("investidas", engine, if_exists="append", index=False)
+        return len(novos)
+    except Exception as e:
+        print(f"[ERRO] Falha ao gravar comunicados: {e}")
+        return 0
+
+
+def ler_comunicados(cnpj=None, categoria=None):
+    """Comunicados gravados, mais recentes primeiro."""
+    consulta = "SELECT * FROM investidas"
+    condicoes, params = [], {}
+    if cnpj:
+        condicoes.append("REPLACE(REPLACE(REPLACE(cnpj,'.',''),'/',''),'-','') = :cnpj")
+        params["cnpj"] = "".join(c for c in str(cnpj) if c.isdigit())
+    if categoria:
+        condicoes.append("categoria = :cat")
+        params["cat"] = categoria
+    if condicoes:
+        consulta += " WHERE " + " AND ".join(condicoes)
+    consulta += " ORDER BY data_arquivamento DESC NULLS LAST LIMIT 200"
+    try:
+        return pd.read_sql(text(consulta), engine, params=params)
+    except Exception as e:
+        print(f"[ERRO] Falha ao ler comunicados: {e}")
+        return pd.DataFrame()
 
 
 def gerar_alerta_investidas(nome_empresa):

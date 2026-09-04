@@ -1,54 +1,134 @@
 """
-paginas/investidas.py - Pagina "Investidas": monitor de fatos relevantes
-por empresa cadastrada.
+paginas/investidas.py - Pagina "Empresas monitoradas": comunicados oficiais
+das empresas que voce acompanha, vindos do IPE da CVM.
+
+Deixou de listar noticias de imprensa: isso agora vive na pagina de Noticias,
+com filtro por empresa. Aqui e' o que a EMPRESA comunicou oficialmente - fato
+relevante, aviso aos acionistas, deliberacao de JCP - com link para o
+documento na CVM.
+
+O vinculo com a CVM e' por CNPJ, nao por nome. Medido no dado real: buscar
+"VALE" por nome traz 324 registros, quase todos de empresas agricolas; "ITAU"
+traz a "Companhia Itaunense Energia" junto do Itau Unibanco. Por isso a tela
+pede que voce escolha a companhia UMA VEZ, e grava o CNPJ.
 """
 import streamlit as st
 
 
 def pagina_investidas():
-    st.subheader("Monitor de empresas")
+    st.subheader("🏢 Empresas monitoradas")
+
     try:
         from investidas import (
             adicionar_empresa_interesse,
+            buscar_companhias_cvm,
             criar_tabela_empresas_interesse,
-            filtrar_noticias_por_empresa,
+            criar_tabela_investidas,
+            empresas_sem_vinculo,
+            ler_comunicados,
             listar_empresas_interesse,
             remover_empresa_interesse,
         )
-
-        criar_tabela_empresas_interesse()
-
-        with st.form("form_empresas_interesse", clear_on_submit=True):
-            nome_empresa = st.text_input("Empresa", placeholder="Ex.: Itaúsa")
-            cnpj = st.text_input("CNPJ (opcional)", placeholder="17.197.092/0001-91")
-            enviado = st.form_submit_button("Adicionar empresa")
-            if enviado and nome_empresa:
-                ok = adicionar_empresa_interesse(nome_empresa, cnpj)
-                if ok:
-                    st.success(f"Empresa {nome_empresa} adicionada ao monitoramento.")
-                else:
-                    st.warning("Não foi possível salvar a empresa.")
-
-        empresas = listar_empresas_interesse()
-        if empresas.empty:
-            st.info("Nenhuma empresa configurada. Adicione uma para começar a monitorar notícias.")
-        else:
-            for _, empresa in empresas.iterrows():
-                nome = empresa["nome_empresa"]
-                cnpj_empresa = empresa.get("cnpj", "")
-                noticias_empresa = filtrar_noticias_por_empresa(nome)
-                col1, col2 = st.columns([4, 1])
-                with col1:
-                    st.markdown(f"### {nome} ({cnpj_empresa or 'CNPJ não informado'})")
-                with col2:
-                    if st.button("Remover", key=f"remove_{nome}"):
-                        remover_empresa_interesse(nome)
-                        st.rerun()
-
-                if noticias_empresa.empty:
-                    st.caption(f"Sem notícias recentes sobre {nome}.")
-                else:
-                    for _, n in noticias_empresa.head(5).iterrows():
-                        st.markdown(f"`{n['categoria']}` **[{n['titulo']}]({n['link']})** — _{n['data']}_")
     except Exception as exc:
-        st.warning(f"Erro ao carregar Investidas: {exc}")
+        st.error(f"Erro ao carregar o módulo de empresas: {exc}")
+        return
+
+    criar_tabela_empresas_interesse()
+    criar_tabela_investidas()
+
+    # ---------------- Vincular empresa ----------------
+    with st.expander("➕ Monitorar uma empresa", expanded=False):
+        st.caption(
+            "Busque pela razão social ou nome comercial. A lista traz apenas "
+            "companhias com registro **ativo** na CVM — é o que evita vincular "
+            "à empresa errada."
+        )
+        termo = st.text_input("Buscar companhia", placeholder="Ex.: Itausa, Petrobras, Vale")
+        if termo.strip():
+            candidatas = buscar_companhias_cvm(termo)
+            if candidatas.empty:
+                st.warning(
+                    "Nenhuma companhia ativa encontrada. Rode `python coleta_cvm.py` "
+                    "para baixar o cadastro da CVM, ou tente outro termo."
+                )
+            else:
+                rotulos = {
+                    f"{linha['denom_social']} — {linha.get('cnpj_formatado') or linha['cnpj']}"
+                    f" ({linha.get('setor') or 'setor n/d'})": linha
+                    for _, linha in candidatas.iterrows()
+                }
+                escolha = st.selectbox("Companhia", list(rotulos.keys()))
+                if st.button("Monitorar esta empresa"):
+                    linha = rotulos[escolha]
+                    ok = adicionar_empresa_interesse(linha["denom_social"], linha["cnpj"])
+                    if ok:
+                        st.success(f"{linha['denom_social']} agora é monitorada.")
+                        st.rerun()
+                    else:
+                        st.warning("Não foi possível salvar.")
+
+    # ---------------- Pendencias de vinculo ----------------
+    pendentes = empresas_sem_vinculo()
+    if pendentes:
+        st.warning(
+            f"**{len(pendentes)} empresa(s) sem CNPJ vinculado**: "
+            + ", ".join(pendentes)
+            + ". Elas ficam fora da coleta de comunicados — sem CNPJ não dá para "
+            "casar com a CVM sem risco de trazer a empresa errada. Vincule-as "
+            "pela busca acima."
+        )
+
+    empresas = listar_empresas_interesse()
+    if empresas.empty:
+        st.info("Nenhuma empresa monitorada ainda. Use a busca acima para adicionar.")
+        return
+
+    # ---------------- Comunicados ----------------
+    nomes = list(empresas["nome_empresa"])
+    escolhida = st.selectbox("Empresa", nomes, key="empresa_comunicados")
+    linha_empresa = empresas[empresas["nome_empresa"] == escolhida].iloc[0]
+    cnpj = str(linha_empresa.get("cnpj") or "")
+
+    if not "".join(c for c in cnpj if c.isdigit()):
+        st.info(
+            f"**{escolhida}** ainda não tem CNPJ vinculado, então não há comunicados. "
+            "Adicione-a novamente pela busca acima para criar o vínculo."
+        )
+    else:
+        comunicados = ler_comunicados(cnpj=cnpj)
+        if comunicados.empty:
+            st.info(
+                f"Nenhum comunicado de **{escolhida}** coletado ainda. "
+                "Rode `python coleta_cvm.py` — a coleta também roda sozinha "
+                "no `atualizar.py`."
+            )
+        else:
+            categorias = sorted(
+                {str(c) for c in comunicados["categoria"].dropna() if str(c).strip()}
+            )
+            filtro = st.selectbox("Categoria", ["(todas)"] + categorias)
+            exibir = comunicados if filtro == "(todas)" else comunicados[
+                comunicados["categoria"].astype(str) == filtro]
+
+            st.caption(f"{len(exibir)} de {len(comunicados)} comunicado(s).")
+            for _, c in exibir.head(60).iterrows():
+                assunto = str(c.get("fato_relevante") or "").strip()
+                if not assunto or assunto.lower() == "nan":
+                    assunto = "(sem assunto informado)"
+                data = str(c.get("data_arquivamento") or "")[:10]
+                link = c.get("link_cvm")
+                categoria = str(c.get("categoria") or "")
+                texto = f"`{categoria}` **{assunto}** — _{data}_"
+                if link and str(link).strip().lower() != "nan":
+                    texto += f" · [documento]({link})"
+                st.markdown(texto)
+
+    # ---------------- Remover ----------------
+    with st.expander("Deixar de monitorar"):
+        alvo = st.selectbox("Empresa a remover", nomes, key="remover_empresa")
+        if st.button("Remover do monitoramento"):
+            if remover_empresa_interesse(alvo):
+                st.success(f"{alvo} removida.")
+                st.rerun()
+            else:
+                st.warning("Não foi possível remover.")

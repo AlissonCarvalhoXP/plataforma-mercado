@@ -18,6 +18,9 @@ PASSOS = [
     ("lista de debentures (CVM)", "coleta_debentures.py"),
     ("enriquecimento de debentures", "enriquecer_debentures.py"),
     ("noticias", "coleta_noticias.py"),
+    # Cadastro de companhias da CVM + comunicados (IPE) das empresas
+    # monitoradas. So' coleta das que tem CNPJ vinculado.
+    ("comunicados da CVM (IPE)", "coleta_cvm.py"),
     ("classificacao de noticias com IA", "classificar_noticias.py"),
     ("cadeia de opcoes B3", "modules/opcoes/coleta_opcoes.py"),
     # Depende do passo acima: fecha as declaracoes de cenario vencidas usando o

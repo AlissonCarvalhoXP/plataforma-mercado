@@ -44,7 +44,7 @@ pg = st.navigation([
     st.Page(pagina_macro, title="Macro", icon="📈"),
     st.Page(pagina_debentures, title="Debêntures", icon="🏦"),
     st.Page(pagina_noticias, title="Notícias", icon="📰"),
-    st.Page(pagina_investidas, title="Investidas", icon="🏢"),
+    st.Page(pagina_investidas, title="Empresas monitoradas", icon="🏢"),
     st.Page(pagina_carteira, title="Carteira", icon="💼"),
     st.Page(pagina_relatorios, title="Relatórios", icon="📥"),
     st.Page(pagina_opcoes, title="Opções", icon="🧮"),
