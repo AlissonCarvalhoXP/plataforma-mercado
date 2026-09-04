@@ -160,6 +160,44 @@ def selecionar_strike(escada: list[float], spot: float, seletor: str,
     return None
 
 
+def pernas_para_json(pernas: list[Perna]) -> str:
+    """Serializa as pernas para guardar junto de uma operacao registrada.
+
+    Guardar as pernas, e nao so' o nome da estrutura, e' o que permite
+    recalcular o resultado meses depois sem depender de a cadeia daquele dia
+    ainda existir no banco - mesmo raciocinio de guardar a distribuicao
+    implicita no momento da declaracao."""
+    import json
+    return json.dumps([{"lado": p.lado, "tipo": p.tipo, "strike": p.strike,
+                        "premio": p.premio, "quantidade": p.quantidade,
+                        "vencimento": p.vencimento} for p in pernas])
+
+
+def pernas_de_json(texto: str) -> list[Perna]:
+    """Reconstroi as pernas a partir do JSON gravado."""
+    import json
+    return [Perna(**d) for d in json.loads(texto)]
+
+
+def resultado_no_vencimento(pernas: list[Perna], preco_realizado: float,
+                             premio_executado: float | None = None,
+                             lote: int = LOTE_PADRAO_B3) -> float:
+    """Resultado em reais da estrutura, ao preco que de fato ocorreu.
+
+    `premio_executado` (liquido, em reais, positivo = debito pago) ajusta o
+    resultado quando voce montou a operacao a um preco diferente do exibido na
+    tela - o que e' a regra, nao a excecao, por causa do spread. A conta e'
+    exata: o payoff e' (valor intrinseco total - premio pago), entao trocar o
+    premio desloca o resultado pela diferenca.
+
+    Sem `premio_executado`, devolve o payoff nos precos de tela: mede o que a
+    FERRAMENTA teria produzido, nao o que voce conseguiu executar."""
+    resultado = payoff_estrutura(pernas, preco_realizado, lote)
+    if premio_executado is None:
+        return resultado
+    return resultado + (premio_liquido(pernas, lote) - premio_executado)
+
+
 @dataclass(frozen=True)
 class DeclaracaoEstrutura:
     """Uma estrutura e' DECLARADA, nao codificada: acrescentar uma linha ao
@@ -448,5 +486,24 @@ if __name__ == "__main__":
         tese_vol="cara", tese_direcao="baixa", tem_posicao=True)
     assert "venda coberta de CALL" in {m.nome for m in com_posicao}
     print("[OK] Caso 13: venda coberta so' aparece com posicao na carteira.")
+
+    # Caso 14: pernas sobrevivem a ida e volta em JSON. E' o que permite
+    # registrar uma operacao hoje e recalcular o resultado dela meses depois,
+    # sem depender de a cadeia daquele dia ainda existir no banco.
+    texto = pernas_para_json(trava)
+    voltaram = pernas_de_json(texto)
+    assert voltaram == trava
+    assert payoff_estrutura(voltaram, 40.0) == payoff_estrutura(trava, 40.0)
+    print("[OK] Caso 14: pernas sobrevivem a serializacao em JSON.")
+
+    # Caso 15: resultado no vencimento, com e sem preco executado.
+    # Sem preco executado, e' o payoff no preco realizado.
+    assert resultado_no_vencimento(trava, 40.0) == 350.0
+    # Com preco executado PIOR que a tela (paguei 2,00 de debito em vez de
+    # 1,50), o resultado cai exatamente a diferenca: 350 - 50 = 300.
+    assert resultado_no_vencimento(trava, 40.0, premio_executado=200.0) == 300.0
+    # Com preco executado MELHOR que a tela, sobe.
+    assert resultado_no_vencimento(trava, 40.0, premio_executado=100.0) == 400.0
+    print("[OK] Caso 15: resultado ajusta pelo premio de fato executado.")
 
     print("\nTodos os casos passaram.")

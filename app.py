@@ -5,6 +5,7 @@ import streamlit as st
 from dados_app import carregar_debentures, carregar_dolar, carregar_indicadores, carregar_noticias, ultimo_valor
 from db import engine
 from paginas.carteira import pagina_carteira
+from paginas.historico_opcoes import pagina_historico_opcoes
 from paginas.investidas import pagina_investidas
 from paginas.macro import pagina_macro
 from paginas.noticias import pagina_noticias
@@ -45,6 +46,7 @@ pg = st.navigation([
     st.Page(pagina_carteira, title="Carteira", icon="💼"),
     st.Page(pagina_relatorios, title="Relatórios", icon="📥"),
     st.Page(pagina_opcoes, title="Opções", icon="🧮"),
+    st.Page(pagina_historico_opcoes, title="Histórico Opções", icon="📒"),
 ])
 pg.run()
 

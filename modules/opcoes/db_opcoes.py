@@ -309,6 +309,128 @@ def spot_na_data(ativo: str, data: str, db_path: str | Path | None = None) -> fl
         con.close()
 
 
+def init_schema_operacoes(db_path: str | Path | None = None) -> None:
+    """Tabela das operacoes que o usuario registrou para acompanhar.
+
+    As PERNAS ficam guardadas em JSON, nao so' o nome da estrutura: e' o que
+    permite recalcular o resultado meses depois sem depender de a cadeia
+    daquele dia ainda existir.
+
+    Preco_Executado nulo significa "estou acompanhando" (registro pelo preco de
+    tela); preenchido significa "montei de verdade" por aquele premio liquido.
+    Sao medidas diferentes - a primeira mede o que a FERRAMENTA produziu, a
+    segunda o que voce conseguiu EXECUTAR - e a tela as separa."""
+    con = _conn(db_path)
+    try:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS opcoes_operacoes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                Ativo TEXT NOT NULL,
+                Data_Registro TEXT NOT NULL,
+                Data_Vencimento TEXT NOT NULL,
+                Estrutura TEXT NOT NULL,
+                Pernas_Json TEXT NOT NULL,
+                Premio_Tela REAL NOT NULL,
+                Preco_Executado REAL,
+                Perda_Maxima REAL,
+                Ganho_Maximo REAL,
+                Resultado_Realizado REAL
+            )
+        """)
+        con.commit()
+    finally:
+        con.close()
+
+
+def gravar_operacao(ativo: str, data_registro: str, vencimento: str,
+                     estrutura: str, pernas_json: str, premio_tela: float,
+                     preco_executado: float | None, perda_maxima: float | None,
+                     ganho_maximo: float | None,
+                     db_path: str | Path | None = None) -> int:
+    """Registra uma operacao e devolve o id gerado.
+
+    perda_maxima/ganho_maximo em None significam ILIMITADO, mesma convencao de
+    estruturas_opcoes.PerfilRisco."""
+    con = _conn(db_path)
+    try:
+        cur = con.execute("""
+            INSERT INTO opcoes_operacoes
+                (Ativo, Data_Registro, Data_Vencimento, Estrutura, Pernas_Json,
+                 Premio_Tela, Preco_Executado, Perda_Maxima, Ganho_Maximo)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ativo, data_registro, vencimento, estrutura, pernas_json,
+              premio_tela, preco_executado, perda_maxima, ganho_maximo))
+        con.commit()
+        return int(cur.lastrowid)
+    finally:
+        con.close()
+
+
+def ler_operacoes(ativo: str | None = None,
+                   db_path: str | Path | None = None) -> list[dict]:
+    """Operacoes registradas, mais recentes primeiro. ativo=None traz todas."""
+    con = _conn(db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        if ativo:
+            linhas = con.execute(
+                "SELECT * FROM opcoes_operacoes WHERE Ativo=? "
+                "ORDER BY Data_Registro DESC, id DESC", (ativo,)).fetchall()
+        else:
+            linhas = con.execute(
+                "SELECT * FROM opcoes_operacoes "
+                "ORDER BY Data_Registro DESC, id DESC").fetchall()
+        return [dict(l) for l in linhas]
+    finally:
+        con.close()
+
+
+def operacoes_a_fechar(hoje: str, db_path: str | Path | None = None) -> list[tuple]:
+    """Operacoes vencidas e ainda sem resultado: a fila do passo diario."""
+    con = _conn(db_path)
+    try:
+        return [tuple(r) for r in con.execute("""
+            SELECT id, Ativo, Data_Vencimento, Pernas_Json, Preco_Executado
+            FROM opcoes_operacoes
+            WHERE Data_Vencimento <= ? AND Resultado_Realizado IS NULL
+            ORDER BY Data_Vencimento
+        """, (hoje,)).fetchall()]
+    finally:
+        con.close()
+
+
+def registrar_resultado_operacao(id_operacao: int, resultado: float,
+                                  db_path: str | Path | None = None) -> None:
+    """Fecha uma operacao com o resultado apurado no vencimento."""
+    con = _conn(db_path)
+    try:
+        con.execute("UPDATE opcoes_operacoes SET Resultado_Realizado=? WHERE id=?",
+                    (resultado, id_operacao))
+        con.commit()
+    finally:
+        con.close()
+
+
+def ler_declaracoes(ativo: str | None = None,
+                     db_path: str | Path | None = None) -> list[dict]:
+    """Todas as declaracoes de cenario, para a pagina de historico."""
+    con = _conn(db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        if ativo:
+            linhas = con.execute(
+                "SELECT * FROM opcoes_cenarios WHERE Ativo=? "
+                "ORDER BY Data_Declaracao DESC, Data_Vencimento DESC, Cenario",
+                (ativo,)).fetchall()
+        else:
+            linhas = con.execute(
+                "SELECT * FROM opcoes_cenarios "
+                "ORDER BY Data_Declaracao DESC, Data_Vencimento DESC, Cenario").fetchall()
+        return [dict(l) for l in linhas]
+    finally:
+        con.close()
+
+
 def list_existing_tables(db_path: str | Path | None = None) -> list[str]:
     """Diagnóstico: lista todas as tabelas do banco (prova de que nada foi apagado)."""
     con = _conn(db_path)
@@ -388,5 +510,38 @@ if __name__ == "__main__":
         assert declaracoes_a_fechar("2026-10-20", banco3) == []
         assert ler_cenarios("PETR4", "2026-10-16", banco3)[0]["Preco_Realizado"] == 36.5
         print("[OK] Caso 4: fila de fechamento respeita o vencimento e esvazia ao registrar.")
+
+    with tempfile.TemporaryDirectory() as tmp4:
+        banco4 = _os.path.join(tmp4, "teste_ops.db")
+        init_schema_operacoes(banco4)
+
+        pernas_json = '[{"lado": "comprar", "tipo": "CALL", "strike": 30.0, "premio": 2.0, "quantidade": 1, "vencimento": "2026-10-16"}]'
+
+        # Caso 5: operacao ACOMPANHADA (sem preco executado) e EXECUTADA
+        # (com preco) convivem e sao distinguiveis - medem coisas diferentes:
+        # o que a ferramenta produziu vs o que voce conseguiu executar.
+        id_acomp = gravar_operacao("PETR4", "2026-09-03", "2026-10-16",
+                                    "trava de alta com calls", pernas_json,
+                                    150.0, None, -150.0, 350.0, banco4)
+        id_exec = gravar_operacao("PETR4", "2026-09-03", "2026-10-16",
+                                   "compra de straddle", pernas_json,
+                                   250.0, 265.0, -250.0, None, banco4)
+        ops = ler_operacoes("PETR4", banco4)
+        assert len(ops) == 2
+        por_id = {o["id"]: o for o in ops}
+        assert por_id[id_acomp]["Preco_Executado"] is None
+        assert por_id[id_exec]["Preco_Executado"] == 265.0
+        assert por_id[id_acomp]["Ganho_Maximo"] == 350.0
+        assert por_id[id_exec]["Ganho_Maximo"] is None   # ilimitado
+        print("[OK] Caso 5: operacoes acompanhadas e executadas convivem e se distinguem.")
+
+        # Caso 6: fila de fechamento das operacoes respeita o vencimento
+        assert len(operacoes_a_fechar("2026-10-20", banco4)) == 2
+        assert operacoes_a_fechar("2026-10-01", banco4) == []
+        registrar_resultado_operacao(id_acomp, 480.0, banco4)
+        pendentes = operacoes_a_fechar("2026-10-20", banco4)
+        assert len(pendentes) == 1 and pendentes[0][0] == id_exec
+        assert ler_operacoes("PETR4", banco4)[0]["Resultado_Realizado"] in (480.0, None)
+        print("[OK] Caso 6: fila de operacoes esvazia conforme o resultado e' registrado.")
 
     print("\nTodos os casos passaram.")

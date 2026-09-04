@@ -424,6 +424,55 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
             for motivo in recusas:
                 st.write(f"- {motivo}")
 
+    # ---------------- Registrar uma operacao para acompanhar ----------------
+    # Sem isto nao ha' o que medir depois: as estruturas sao recalculadas a
+    # cada abertura da tela e nao ficam gravadas em lugar nenhum. Registrar
+    # guarda as PERNAS (nao so' o nome), o que permite apurar o resultado no
+    # vencimento sem depender de a cadeia daquele dia ainda existir.
+    if montadas:
+        with st.expander("📌 Registrar uma operação para acompanhar"):
+            st.caption(
+                "O resultado é apurado sozinho no vencimento, pelo passo diário. "
+                "Deixe o prêmio executado em branco para apenas **acompanhar** "
+                "(usa o preço de tela); preencha para registrar que você **montou** "
+                "de verdade — em opção ilíquida o executado costuma diferir da tela, "
+                "e é essa diferença que separa medir a ferramenta de medir a execução."
+            )
+            nomes = [m.nome for m in montadas]
+            escolhida = st.selectbox("Estrutura", nomes, key="op_escolhida")
+            estrutura = next(m for m in montadas if m.nome == escolhida)
+            st.write(" / ".join(f"{p.lado} {p.tipo} {p.strike:.2f} @ {p.premio:.2f}"
+                                for p in estrutura.pernas))
+            premio_tela = estrutura.perfil.premio_liquido
+            st.caption(f"Prêmio líquido de tela: R$ {premio_tela:,.2f} "
+                       f"({'débito pago' if premio_tela > 0 else 'crédito recebido'})")
+            executado_txt = st.text_input(
+                "Prêmio líquido executado (em reais, deixe vazio se só acompanhando)",
+                key="op_executado")
+            if st.button("Registrar operação", key="op_registrar"):
+                executado = None
+                if executado_txt.strip():
+                    try:
+                        executado = float(executado_txt.replace(",", "."))
+                    except ValueError:
+                        executado = "erro"
+                if executado == "erro":
+                    st.error("Prêmio executado inválido — use número, ex.: 152.50")
+                else:
+                    db_opcoes.init_schema_operacoes(db_path)
+                    db_opcoes.gravar_operacao(
+                        ativo, str(_date.today()), vencimento_escolhido,
+                        estrutura.nome, eo.pernas_para_json(estrutura.pernas),
+                        premio_tela, executado,
+                        estrutura.perfil.perda_maxima, estrutura.perfil.ganho_maximo,
+                        db_path)
+                    rotulo = "executada" if executado is not None else "acompanhada"
+                    st.success(
+                        f"Operação registrada como *{rotulo}*. Ela aparece na página "
+                        "**Histórico Opções**, e o resultado é apurado automaticamente "
+                        "no vencimento."
+                    )
+
     # ---------------- Afericao dos cenarios ja fechados ----------------
     # Mede o DECLARANTE, nao o mercado: "quando voce diz 25%, acontece 25% das
     # vezes?" e' pergunta bem-posta, ao contrario de "o Score preve retorno?".

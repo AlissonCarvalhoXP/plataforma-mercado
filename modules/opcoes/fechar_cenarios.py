@@ -17,6 +17,7 @@ from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import db_opcoes
+import estruturas_opcoes as eo
 
 
 def fechar(hoje: str | None = None, db_path=None) -> tuple[int, int]:
@@ -43,6 +44,37 @@ def fechar(hoje: str | None = None, db_path=None) -> tuple[int, int]:
                                                spot, db_path)
         fechadas += 1
         print(f"  {ativo} {vencimento}: fechada com spot R$ {spot:.2f}")
+
+    return fechadas, sem_cotacao
+
+
+def fechar_operacoes(hoje: str | None = None, db_path=None) -> tuple[int, int]:
+    """Apura o resultado das operacoes registradas cujo vencimento ja passou.
+
+    Devolve (fechadas, sem_cotacao). Usa payoff_estrutura sobre as pernas
+    guardadas em JSON - por isso nao depende de a cadeia daquele dia ainda
+    existir no banco. Quando ha preco executado, o resultado e' ajustado por
+    ele; sem preco executado, mede o payoff nos precos de tela."""
+    db_opcoes.init_schema_operacoes(db_path)
+    hoje = hoje or str(date.today())
+    pendentes = db_opcoes.operacoes_a_fechar(hoje, db_path)
+
+    fechadas = 0
+    sem_cotacao = 0
+    for id_op, ativo, vencimento, pernas_json, preco_executado in pendentes:
+        spot = db_opcoes.spot_na_data(ativo, vencimento, db_path)
+        if spot is None:
+            sem_cotacao += 1
+            print(f"  operacao {id_op} ({ativo} {vencimento}): sem cotacao no banco - "
+                  f"fica em aberto")
+            continue
+        pernas = eo.pernas_de_json(pernas_json)
+        resultado = eo.resultado_no_vencimento(pernas, spot, preco_executado)
+        db_opcoes.registrar_resultado_operacao(id_op, resultado, db_path)
+        fechadas += 1
+        rotulo = "executada" if preco_executado is not None else "acompanhada"
+        print(f"  operacao {id_op} ({ativo} {vencimento}, {rotulo}): "
+              f"spot R$ {spot:.2f} -> resultado R$ {resultado:,.2f}")
 
     return fechadas, sem_cotacao
 
@@ -89,9 +121,39 @@ if __name__ == "__main__":
         assert db_opcoes.ler_cenarios("PETR4", "2026-12-19", banco)[0]["Preco_Realizado"] is None
         print("[OK] Caso 4: declaracao ainda nao vencida nao e' fechada.")
 
+        # Caso 5: operacao vencida e' apurada com o payoff no spot daquele dia.
+        # Trava de alta 30/35 comprada por 1,50 de debito: acima de 35 o ganho
+        # e' travado em (35-30-1,50)*100 = 350.
+        db_opcoes.init_schema_operacoes(banco)
+        pernas = [eo.Perna(lado="comprar", tipo="CALL", strike=30.0, premio=2.00),
+                  eo.Perna(lado="vender", tipo="CALL", strike=35.0, premio=0.50)]
+        id_op = db_opcoes.gravar_operacao(
+            "PETR4", "2026-07-01", "2026-08-15", "trava de alta com calls",
+            eo.pernas_para_json(pernas), 150.0, None, -150.0, 350.0, banco)
+        fechadas_op, sem_op = fechar_operacoes("2026-08-20", banco)
+        assert (fechadas_op, sem_op) == (1, 0), (fechadas_op, sem_op)
+        # spot daquele dia foi 37,25 (gravado no Caso 1), acima de 35
+        assert db_opcoes.ler_operacoes("PETR4", banco)[0]["Resultado_Realizado"] == 350.0
+        print("[OK] Caso 5: operacao vencida e' apurada pelo payoff no spot realizado.")
+
+        # Caso 6: com preco EXECUTADO pior que a tela, o resultado cai a
+        # diferenca - e' o que separa medir a ferramenta de medir a execucao.
+        id_op2 = db_opcoes.gravar_operacao(
+            "PETR4", "2026-07-01", "2026-08-15", "trava de alta com calls",
+            eo.pernas_para_json(pernas), 150.0, 200.0, -200.0, 300.0, banco)
+        fechar_operacoes("2026-08-20", banco)
+        resultado2 = [o for o in db_opcoes.ler_operacoes("PETR4", banco)
+                      if o["id"] == id_op2][0]["Resultado_Realizado"]
+        assert resultado2 == 300.0, resultado2
+        print("[OK] Caso 6: preco executado pior que a tela reduz o resultado apurado.")
+
     print("\nTodos os casos passaram.\n")
 
     # Execucao real
-    print("Fechando declaracoes vencidas...")
+    print("Fechando declaracoes de cenario vencidas...")
     fechadas, sem_cotacao = fechar()
-    print(f"{fechadas} fechada(s), {sem_cotacao} sem cotacao disponivel.")
+    print(f"{fechadas} declaracao(oes) fechada(s), {sem_cotacao} sem cotacao.")
+
+    print("Apurando operacoes registradas vencidas...")
+    fechadas_op, sem_op = fechar_operacoes()
+    print(f"{fechadas_op} operacao(oes) apurada(s), {sem_op} sem cotacao.")
