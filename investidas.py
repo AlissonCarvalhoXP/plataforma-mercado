@@ -160,6 +160,61 @@ def filtrar_noticias_por_empresa(nome_empresa):
         return pd.DataFrame(columns=['titulo', 'link', 'data', 'categoria'])
 
 
+def filtrar_noticias(noticias, termos=None, categoria=None):
+    """Filtra um DataFrame de noticias por termos no titulo e/ou categoria.
+
+    `termos` e' uma lista: a noticia entra se o titulo mencionar QUALQUER um
+    deles (OU entre termos - voce quer noticias da Petrobras OU da Vale, nao
+    das duas ao mesmo tempo). Ja termos e categoria se somam (E): filtrar por
+    empresa e por categoria restringe as duas coisas.
+
+    Funcao pura, sem banco: quem chama traz o DataFrame. Isso a torna
+    testavel sem depender do estado do banco, e reaproveitavel por qualquer
+    tela.
+
+    A busca e' por MENCAO no titulo, sem acento nem caixa - deliberadamente
+    simples. Casar entidade de verdade exigiria dicionario de nomes e
+    apelidos ("Petrobras", "PETR4", "estatal petrolifera"), que e' outro
+    problema; mencao literal e' previsivel e auditavel, e o usuario ve quantas
+    sobraram para perceber quando o filtro esta' apertado demais."""
+    import unicodedata
+
+    if noticias is None or len(noticias) == 0:
+        return noticias
+
+    def _normalizar(texto):
+        texto = str(texto or "")
+        sem_acento = unicodedata.normalize("NFKD", texto)
+        sem_acento = "".join(c for c in sem_acento if not unicodedata.combining(c))
+        return sem_acento.upper()
+
+    resultado = noticias
+    termos = [t.strip() for t in (termos or []) if str(t).strip()]
+    if termos:
+        alvos = [_normalizar(t) for t in termos]
+        titulos = resultado["titulo"].map(_normalizar)
+        mascara = titulos.apply(lambda t: any(a in t for a in alvos))
+        resultado = resultado[mascara]
+
+    if categoria:
+        resultado = resultado[resultado["categoria"].astype(str) == str(categoria)]
+
+    return resultado
+
+
+def categorias_disponiveis(noticias):
+    """Categorias realmente presentes nas noticias, sem nulos nem vazios.
+
+    Devolve lista vazia quando nada foi classificado - a tela usa isso para
+    NAO exibir um seletor de categoria inutil. Hoje e' o caso: a classificacao
+    por IA vem falhando (503 da API), e oferecer o filtro sugeriria uma
+    capacidade que nao existe."""
+    if noticias is None or len(noticias) == 0 or "categoria" not in noticias:
+        return []
+    valores = noticias["categoria"].dropna().astype(str).str.strip()
+    return sorted({v for v in valores if v and v.lower() != "nan"})
+
+
 def gerar_alerta_investidas(nome_empresa):
     """Gera texto de alerta se houver notícias ou fatos da empresa."""
     noticias = filtrar_noticias_por_empresa(nome_empresa)
@@ -173,6 +228,51 @@ def gerar_alerta_investidas(nome_empresa):
 
 
 if __name__ == "__main__":
+    # Auto-testes das funcoes PURAS primeiro: nao tocam banco, entao rodam
+    # sempre, mesmo sem conexao.
+    import pandas as _pd
+
+    amostra = _pd.DataFrame([
+        {"titulo": "Petrobras anuncia dividendo extraordinario", "categoria": "Bolsa"},
+        {"titulo": "Copom eleva Selic para 15%", "categoria": "Juros"},
+        {"titulo": "Franca nao teme Espanha no jogo de hoje", "categoria": None},
+        {"titulo": "ITAUSA divulga resultado do trimestre", "categoria": ""},
+    ])
+
+    # Caso 1: filtra por mencao no titulo, ignorando caixa e acento
+    assert len(filtrar_noticias(amostra, termos=["petrobras"])) == 1
+    assert len(filtrar_noticias(amostra, termos=["FRANCA"])) == 1   # acento no titulo
+    assert len(filtrar_noticias(amostra, termos=["itausa"])) == 1   # caixa diferente
+    print("[OK] Caso 1: filtro por mencao ignora caixa e acento.")
+
+    # Caso 2: varios termos sao OU entre si - voce quer noticias da Petrobras
+    # OU da Itausa, nao as que citam as duas ao mesmo tempo.
+    assert len(filtrar_noticias(amostra, termos=["petrobras", "itausa"])) == 2
+    print("[OK] Caso 2: termos multiplos se combinam por OU.")
+
+    # Caso 3: termo e categoria se somam (E), restringindo os dois eixos
+    assert len(filtrar_noticias(amostra, termos=["petrobras"], categoria="Bolsa")) == 1
+    assert len(filtrar_noticias(amostra, termos=["petrobras"], categoria="Juros")) == 0
+    print("[OK] Caso 3: termo e categoria se somam por E.")
+
+    # Caso 4: sem filtro nenhum devolve tudo - nao esconde noticia por engano
+    assert len(filtrar_noticias(amostra)) == len(amostra)
+    assert len(filtrar_noticias(amostra, termos=[])) == len(amostra)
+    assert len(filtrar_noticias(amostra, termos=["   "])) == len(amostra)
+    print("[OK] Caso 4: sem filtro (ou filtro vazio) devolve tudo.")
+
+    # Caso 5: categorias_disponiveis ignora nulo, vazio e a string "nan".
+    # E' o que faz a tela ESCONDER o seletor quando nada foi classificado, em
+    # vez de oferecer um filtro inutil.
+    assert categorias_disponiveis(amostra) == ["Bolsa", "Juros"]
+    sem_classificacao = _pd.DataFrame([{"titulo": "x", "categoria": None},
+                                       {"titulo": "y", "categoria": "nan"}])
+    assert categorias_disponiveis(sem_classificacao) == []
+    print("[OK] Caso 5: categorias_disponiveis ignora nulo, vazio e 'nan'.")
+
+    print("\nTodos os casos passaram.\n")
+
+    # A partir daqui, toca o banco real.
     criar_tabela_investidas()
     criar_tabela_empresas_interesse()
     print("\n=== Teste de monitoramento ===")
