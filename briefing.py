@@ -44,12 +44,20 @@ if not noticias.empty:
     contexto += "\nManchetes de mercado: " + "; ".join(noticias["titulo"].head(8))
 
 # 2) a IA escreve o briefing
+def _agora():
+    """Data/hora da geracao. Sem isto a tela exibe texto antigo como se fosse
+    de agora - e quando a cota da API de IA estoura, o briefing congela sem
+    ninguem perceber."""
+    from datetime import datetime
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
 briefing = gerar_briefing(contexto)
 
 # 3) so salva se DEU CERTO (nao sobrescreve o bom com uma falha)
 if briefing:
     print(briefing)
-    pd.DataFrame([{"texto": briefing}]).to_sql("briefing", engine, if_exists="replace", index=False)
+    pd.DataFrame([{"texto": briefing, "gerado_em": _agora()}]).to_sql("briefing", engine, if_exists="replace", index=False)
     print("\nBriefing salvo no banco.")
 else:
     print("Briefing nao gerado agora (servidor ocupado). O anterior foi mantido.")
@@ -57,7 +65,7 @@ else:
 # 4) Destaques do dia (reutiliza o mesmo contexto)
 destaques = gerar_destaques(contexto)
 if destaques:
-    pd.DataFrame([{"texto": destaques}]).to_sql("destaques", engine, if_exists="replace", index=False)
+    pd.DataFrame([{"texto": destaques, "gerado_em": _agora()}]).to_sql("destaques", engine, if_exists="replace", index=False)
     print("\nDestaques:")
     print(destaques)
 else:
