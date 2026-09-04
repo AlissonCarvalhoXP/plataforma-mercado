@@ -51,14 +51,41 @@ def pagina_relatorios():
                         width="stretch",
                     )
 
+        st.divider()
+        # "Gerar todos" antes so' escrevia os arquivos no disco do servidor e
+        # imprimia os caminhos - nenhum botao de download aparecia, entao pela
+        # tela o lote parecia nao funcionar. Agora ele alimenta os MESMOS
+        # session_state dos botoes individuais (fazendo os tres downloads
+        # aparecerem) e ainda oferece um ZIP unico.
         if st.button("Gerar todos os relatórios"):
-            try:
-                from relatorios import exportar_todos_relatorios
-                arquivos = exportar_todos_relatorios()
-                st.success(f"{len(arquivos)} relatórios gerados.")
-                for destino in arquivos:
-                    st.caption(destino)
-            except Exception as exc:
-                st.error(f"Erro ao gerar lote: {exc}")
+            gerados = {}
+            for nome, (arquivo_nome, export_func) in relatorios.items():
+                payload, _ = _gerar_bytes_relatorio(export_func)
+                if payload is not None:
+                    st.session_state[f"download_{arquivo_nome}"] = payload
+                    gerados[arquivo_nome] = payload
+            if gerados:
+                import io as _io
+                import zipfile as _zipfile
+                buffer = _io.BytesIO()
+                with _zipfile.ZipFile(buffer, "w", _zipfile.ZIP_DEFLATED) as zip_arquivo:
+                    for arquivo_nome, payload in gerados.items():
+                        zip_arquivo.writestr(arquivo_nome, payload)
+                st.session_state["download_todos_zip"] = buffer.getvalue()
+                st.success(
+                    f"{len(gerados)} relatório(s) preparado(s). Baixe em conjunto "
+                    "abaixo, ou individualmente nos botões acima."
+                )
+            else:
+                st.warning("Nenhum relatório pôde ser gerado.")
+
+        if st.session_state.get("download_todos_zip") is not None:
+            st.download_button(
+                label="Baixar todos (.zip)",
+                data=st.session_state["download_todos_zip"],
+                file_name="relatorios.zip",
+                mime="application/zip",
+                width="stretch",
+            )
     except Exception as exc:
         st.warning(f"Erro ao carregar relatórios: {exc}")
