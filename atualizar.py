@@ -20,6 +20,10 @@ PASSOS = [
     ("noticias", "coleta_noticias.py"),
     ("classificacao de noticias com IA", "classificar_noticias.py"),
     ("cadeia de opcoes B3", "modules/opcoes/coleta_opcoes.py"),
+    # Depende do passo acima: fecha as declaracoes de cenario vencidas usando o
+    # spot dos snapshots diarios. Sem isto, a afericao dependeria de o usuario
+    # lembrar de voltar na tela meses depois.
+    ("fechamento de cenarios vencidos", "modules/opcoes/fechar_cenarios.py"),
     ("briefing do dia", "briefing.py"),
     ("envio do briefing por e-mail", "enviar_briefing.py"),
     ("alertas", "alertas.py"),

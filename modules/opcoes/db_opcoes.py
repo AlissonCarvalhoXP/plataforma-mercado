@@ -144,7 +144,31 @@ def init_schema_cenarios(db_path: str | Path | None = None) -> None:
                 Preco_Alvo REAL NOT NULL,
                 Probabilidade REAL NOT NULL,
                 Premissa TEXT,
+                Ajustado INTEGER DEFAULT 0,
+                Preco_Realizado REAL,
                 PRIMARY KEY (Ativo, Data_Declaracao, Data_Vencimento, Cenario)
+            )
+        """)
+        # Aditivo para bancos que ja tinham a tabela sem estas colunas.
+        for coluna, tipo in (("Ajustado", "INTEGER DEFAULT 0"),
+                             ("Preco_Realizado", "REAL")):
+            try:
+                con.execute(f"ALTER TABLE opcoes_cenarios ADD COLUMN {coluna} {tipo}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+
+        # Distribuicao implicita do MOMENTO da declaracao, uma linha por
+        # declaracao. Guardada aqui porque reconstrui-la depois seria fragil:
+        # dependeria de a cadeia daquele dia ainda existir no banco.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS opcoes_implicitas (
+                Ativo TEXT NOT NULL,
+                Data_Declaracao TEXT NOT NULL,
+                Data_Vencimento TEXT NOT NULL,
+                Q10 REAL NOT NULL, Q25 REAL NOT NULL, Q50 REAL NOT NULL,
+                Q75 REAL NOT NULL, Q90 REAL NOT NULL,
+                PRIMARY KEY (Ativo, Data_Declaracao, Data_Vencimento)
             )
         """)
         con.commit()
@@ -154,22 +178,29 @@ def init_schema_cenarios(db_path: str | Path | None = None) -> None:
 
 def gravar_cenario(ativo: str, data_declaracao: str, vencimento: str,
                     cenario: str, preco_alvo: float, probabilidade: float,
-                    premissa: str, db_path: str | Path | None = None) -> None:
+                    premissa: str, db_path: str | Path | None = None,
+                    ajustado: bool = False) -> None:
     """Idempotente: regravar o mesmo (ativo, data, vencimento, cenario)
-    atualiza os valores em vez de duplicar a linha."""
+    atualiza os valores em vez de duplicar a linha.
+
+    `ajustado` registra se o usuario MEXEU nos valores pre-preenchidos pela
+    distribuicao implicita. Importa para a afericao: um cenario aceito sem
+    alteracao e' a visao do MERCADO, nao a do usuario - conta-lo como
+    previsao propria mediria a coisa errada."""
     con = _conn(db_path)
     try:
         con.execute("""
             INSERT INTO opcoes_cenarios
                 (Ativo, Data_Declaracao, Data_Vencimento, Cenario,
-                 Preco_Alvo, Probabilidade, Premissa)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 Preco_Alvo, Probabilidade, Premissa, Ajustado)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(Ativo, Data_Declaracao, Data_Vencimento, Cenario)
             DO UPDATE SET Preco_Alvo=excluded.Preco_Alvo,
                           Probabilidade=excluded.Probabilidade,
-                          Premissa=excluded.Premissa
+                          Premissa=excluded.Premissa,
+                          Ajustado=excluded.Ajustado
         """, (ativo, data_declaracao, vencimento, cenario,
-              preco_alvo, probabilidade, premissa))
+              preco_alvo, probabilidade, premissa, 1 if ajustado else 0))
         con.commit()
     finally:
         con.close()
@@ -193,6 +224,87 @@ def ler_cenarios(ativo: str, vencimento: str,
             ORDER BY Cenario
         """, (ativo, vencimento, ativo, vencimento)).fetchall()
         return [dict(linha) for linha in linhas]
+    finally:
+        con.close()
+
+
+def gravar_implicita(ativo: str, data_declaracao: str, vencimento: str,
+                      q10: float, q25: float, q50: float, q75: float, q90: float,
+                      db_path: str | Path | None = None) -> None:
+    """Guarda a distribuicao implicita do momento da declaracao (idempotente)."""
+    con = _conn(db_path)
+    try:
+        con.execute("""
+            INSERT INTO opcoes_implicitas
+                (Ativo, Data_Declaracao, Data_Vencimento, Q10, Q25, Q50, Q75, Q90)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(Ativo, Data_Declaracao, Data_Vencimento) DO UPDATE SET
+                Q10=excluded.Q10, Q25=excluded.Q25, Q50=excluded.Q50,
+                Q75=excluded.Q75, Q90=excluded.Q90
+        """, (ativo, data_declaracao, vencimento, q10, q25, q50, q75, q90))
+        con.commit()
+    finally:
+        con.close()
+
+
+def ler_implicita(ativo: str, data_declaracao: str, vencimento: str,
+                   db_path: str | Path | None = None) -> dict | None:
+    """A implicita guardada naquela declaracao, ou None se nao houver."""
+    con = _conn(db_path)
+    con.row_factory = sqlite3.Row
+    try:
+        linha = con.execute(
+            "SELECT * FROM opcoes_implicitas WHERE Ativo=? AND Data_Declaracao=? "
+            "AND Data_Vencimento=?", (ativo, data_declaracao, vencimento)).fetchone()
+        return dict(linha) if linha else None
+    finally:
+        con.close()
+
+
+def declaracoes_a_fechar(hoje: str, db_path: str | Path | None = None) -> list[tuple]:
+    """Declaracoes cujo vencimento ja passou e que ainda nao tem realizado.
+
+    E' a fila que o passo diario do atualizar.py consome - fecha o ciclo sem
+    depender de o usuario lembrar de voltar na tela."""
+    con = _conn(db_path)
+    try:
+        return [tuple(r) for r in con.execute("""
+            SELECT DISTINCT Ativo, Data_Declaracao, Data_Vencimento
+            FROM opcoes_cenarios
+            WHERE Data_Vencimento <= ? AND Preco_Realizado IS NULL
+            ORDER BY Data_Vencimento
+        """, (hoje,)).fetchall()]
+    finally:
+        con.close()
+
+
+def registrar_realizado_cenario(ativo: str, data_declaracao: str, vencimento: str,
+                                 preco_realizado: float,
+                                 db_path: str | Path | None = None) -> None:
+    """Fecha uma declaracao com o preco que de fato ocorreu."""
+    con = _conn(db_path)
+    try:
+        con.execute("""
+            UPDATE opcoes_cenarios SET Preco_Realizado = ?
+            WHERE Ativo=? AND Data_Declaracao=? AND Data_Vencimento=?
+        """, (preco_realizado, ativo, data_declaracao, vencimento))
+        con.commit()
+    finally:
+        con.close()
+
+
+def spot_na_data(ativo: str, data: str, db_path: str | Path | None = None) -> float | None:
+    """Spot do ativo naquela data de referencia, dos snapshots diarios.
+
+    Devolve None se nao houver snapshot - nunca aproxima com a data mais
+    proxima: fechar uma declaracao com o preco de outro dia seria inventar o
+    resultado que a afericao existe para medir."""
+    con = _conn(db_path)
+    try:
+        linha = con.execute(
+            "SELECT Spot FROM opcoes_underlying WHERE Ativo_Objeto=? AND Data_Referencia=?",
+            (ativo, data)).fetchone()
+        return float(linha[0]) if linha and linha[0] is not None else None
     finally:
         con.close()
 
@@ -247,5 +359,34 @@ if __name__ == "__main__":
         alta2 = [linha for linha in lidos2 if linha["Cenario"] == "alta"][0]
         assert alta2["Preco_Alvo"] == 44.0 and alta2["Premissa"] == "revisado"
         print("[OK] Caso 2: regravar o mesmo cenario atualiza em vez de duplicar.")
+
+    with tempfile.TemporaryDirectory() as tmp3:
+        banco3 = _os.path.join(tmp3, "teste_afericao.db")
+        init_schema_cenarios(banco3)
+
+        # Caso 3: gravar cenario com a implicita do momento e o flag Ajustado.
+        # Guardar a implicita e' o que permite comparar depois "eu fui melhor
+        # calibrado que o preco?" - reconstruir a implicita do passado seria
+        # fragil, porque depende de a cadeia daquele dia ainda existir.
+        gravar_cenario("PETR4", "2026-09-03", "2026-10-16", "base",
+                       35.0, 0.50, "cenario base", banco3, ajustado=True)
+        gravar_implicita("PETR4", "2026-09-03", "2026-10-16",
+                         28.0, 31.0, 34.0, 37.0, 40.0, banco3)
+        lidos = ler_cenarios("PETR4", "2026-10-16", banco3)
+        assert lidos[0]["Ajustado"] == 1
+        assert lidos[0]["Preco_Realizado"] is None
+        imp = ler_implicita("PETR4", "2026-09-03", "2026-10-16", banco3)
+        assert imp is not None and imp["Q50"] == 34.0
+        print("[OK] Caso 3: cenario guarda o flag Ajustado e a implicita do momento.")
+
+        # Caso 4: declaracoes vencidas e sem realizado entram na fila de
+        # fechamento; as ja fechadas saem dela.
+        pendentes = declaracoes_a_fechar("2026-10-20", banco3)
+        assert ("PETR4", "2026-09-03", "2026-10-16") in pendentes
+        assert declaracoes_a_fechar("2026-10-01", banco3) == []
+        registrar_realizado_cenario("PETR4", "2026-09-03", "2026-10-16", 36.5, banco3)
+        assert declaracoes_a_fechar("2026-10-20", banco3) == []
+        assert ler_cenarios("PETR4", "2026-10-16", banco3)[0]["Preco_Realizado"] == 36.5
+        print("[OK] Caso 4: fila de fechamento respeita o vencimento e esvazia ao registrar.")
 
     print("\nTodos os casos passaram.")

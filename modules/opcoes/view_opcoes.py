@@ -219,17 +219,56 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
     vencimento_escolhido = st.selectbox("Vencimento", vencimentos, key="venc_cenario")
     spot = float(und["Spot"])
 
-    st.markdown("**Seu cenário** — preço-alvo e probabilidade que você atribui")
+    # A distribuicao implicita e' calculada ANTES do formulario porque ela
+    # pre-preenche os campos. Ancorar num numero observavel produz cenario
+    # melhor calibrado que digitar da intuicao - e' a diferenca entre partir
+    # de uma taxa-base e partir do zero.
+    do_vencimento = [linha for linha in rank
+                     if linha["Data_Vencimento"] == vencimento_escolhido]
+    strikes = [linha["Strike"] for linha in do_vencimento]
+    ivs = [linha["IV"] for linha in do_vencimento]
+    dias = do_vencimento[0]["Dias"] if do_vencimento else 30
+
+    faixas = dop.distribuicao_implicita(strikes, ivs, spot, dias / 365, selic)
+
+    if faixas is not None:
+        import numpy as _np
+        centros = _np.array([(f.limite_inferior + f.limite_superior) / 2 for f in faixas])
+        pesos = _np.array([f.probabilidade for f in faixas])
+        pesos = pesos / pesos.sum() if pesos.sum() > 0 else pesos
+        acumulado = _np.cumsum(pesos)
+        quantis = {q: float(_np.interp(q, acumulado, centros)) for q in (0.1, 0.25, 0.5, 0.75, 0.9)}
+        padroes = (("alta", quantis[0.9], 0.25),
+                   ("base", quantis[0.5], 0.50),
+                   ("baixa", quantis[0.1], 0.25))
+        st.markdown("**Seu cenário** — pré-preenchido com o que está embutido no preço")
+        st.caption(
+            "Os campos vêm da distribuição implícita nas opções deste vencimento. "
+            "Ela é **neutra ao risco**: mostra o que está *embutido no preço*, não o "
+            "que o mercado *acredita* — parte da diferença é prêmio de risco. "
+            "**Edite onde você discorda**: um cenário aceito sem alteração é a visão "
+            "do mercado, não a sua, e a aferição registra isso separadamente."
+        )
+    else:
+        quantis = None
+        padroes = (("alta", spot * 1.15, 0.25),
+                   ("base", spot, 0.50),
+                   ("baixa", spot * 0.85, 0.25))
+        st.markdown("**Seu cenário** — preço-alvo e probabilidade que você atribui")
+        st.caption(
+            "Sem distribuição implícita neste vencimento (poucos strikes ou ajuste "
+            "inconsistente), então os campos vêm de um padrão simples em torno do spot."
+        )
+
     colunas = st.columns(3)
     entradas = []
-    padroes = (("alta", spot * 1.15, 0.25),
-               ("base", spot, 0.50),
-               ("baixa", spot * 0.85, 0.25))
     for coluna, (nome, alvo_padrao, prob_padrao) in zip(colunas, padroes):
         with coluna:
             st.markdown(f"*{nome.capitalize()}*")
             entradas.append({
                 "Cenario": nome,
+                "_alvo_padrao": float(round(alvo_padrao, 2)),
+                "_prob_padrao": float(prob_padrao),
                 "Preco_Alvo": st.number_input(
                     f"Alvo ({nome})", value=float(round(alvo_padrao, 2)),
                     key=f"alvo_{nome}"),
@@ -239,31 +278,47 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
                 "Premissa": st.text_input(f"Premissa ({nome})", key=f"premissa_{nome}"),
             })
 
+    # Voce mexeu em algo? A afericao precisa distinguir "formei uma visao" de
+    # "aceitei o que veio pronto" - medir uma copia da implicita mediria o
+    # mercado, nao voce.
+    ajustado = any(
+        abs(e["Preco_Alvo"] - e["_alvo_padrao"]) > 1e-9
+        or abs(e["Probabilidade"] - e["_prob_padrao"]) > 1e-9
+        for e in entradas
+    )
+
     soma = sum(e["Probabilidade"] for e in entradas)
     if abs(soma - 1.0) > 0.01:
         st.warning(f"As probabilidades somam {soma:.0%} — ajuste para 100%.")
-    elif st.button("Salvar cenário"):
-        db_opcoes.init_schema_cenarios(db_path)
-        for cenario in entradas:
-            db_opcoes.gravar_cenario(
-                ativo, str(_date.today()), vencimento_escolhido, cenario["Cenario"],
-                cenario["Preco_Alvo"], cenario["Probabilidade"],
-                cenario["Premissa"], db_path)
-        st.success("Cenário salvo. A data de declaração fica registrada para aferição futura.")
+    else:
+        if not ajustado and quantis is not None:
+            st.info(
+                "Você ainda não alterou nenhum valor. Pode salvar assim, mas o "
+                "cenário será registrado como *não ajustado* — ele reproduz o preço, "
+                "então a aferição não o conta como visão sua."
+            )
+        if st.button("Salvar cenário"):
+            db_opcoes.init_schema_cenarios(db_path)
+            for cenario in entradas:
+                db_opcoes.gravar_cenario(
+                    ativo, str(_date.today()), vencimento_escolhido, cenario["Cenario"],
+                    cenario["Preco_Alvo"], cenario["Probabilidade"],
+                    cenario["Premissa"], db_path, ajustado=ajustado)
+            if quantis is not None:
+                db_opcoes.gravar_implicita(
+                    ativo, str(_date.today()), vencimento_escolhido,
+                    quantis[0.1], quantis[0.25], quantis[0.5], quantis[0.75], quantis[0.9],
+                    db_path)
+            st.success(
+                "Cenário salvo com a data de declaração e a implícita do momento — "
+                "é o que permite comparar depois se você foi melhor calibrado que o preço."
+            )
 
     db_opcoes.init_schema_cenarios(db_path)
     cenarios_salvos = db_opcoes.ler_cenarios(ativo, vencimento_escolhido, db_path)
     if not cenarios_salvos:
         st.info("Declare e salve um cenário acima para ver as operações.")
         return
-
-    do_vencimento = [linha for linha in rank
-                     if linha["Data_Vencimento"] == vencimento_escolhido]
-    strikes = [linha["Strike"] for linha in do_vencimento]
-    ivs = [linha["IV"] for linha in do_vencimento]
-    dias = do_vencimento[0]["Dias"] if do_vencimento else 30
-
-    faixas = dop.distribuicao_implicita(strikes, ivs, spot, dias / 365, selic)
 
     if faixas is None:
         st.info(
@@ -368,3 +423,63 @@ def render_aba_opcoes(selic: float = 0.1415, db_path: str | None = None,
         with st.expander(f"{len(recusas)} estruturas não puderam ser montadas"):
             for motivo in recusas:
                 st.write(f"- {motivo}")
+
+    # ---------------- Afericao dos cenarios ja fechados ----------------
+    # Mede o DECLARANTE, nao o mercado: "quando voce diz 25%, acontece 25% das
+    # vezes?" e' pergunta bem-posta, ao contrario de "o Score preve retorno?".
+    # As declaracoes sao fechadas automaticamente pelo passo diario
+    # fechar_cenarios.py, usando o spot da data do vencimento.
+    import afericao_cenarios as af
+    import sqlite3 as _sqlite3
+
+    st.markdown("---")
+    st.subheader("📈 Aferição — seus cenários contra o que aconteceu")
+
+    con_af = _sqlite3.connect(db_path or db_opcoes.DB_PATH)
+    con_af.row_factory = _sqlite3.Row
+    try:
+        linhas_af = [dict(r) for r in con_af.execute(
+            "SELECT * FROM opcoes_cenarios WHERE Ativo=? AND Preco_Realizado IS NOT NULL "
+            "ORDER BY Data_Declaracao, Data_Vencimento", (ativo,)).fetchall()]
+    finally:
+        con_af.close()
+
+    # Agrupa as tres linhas de cada declaracao
+    por_declaracao = {}
+    for linha in linhas_af:
+        chave = (linha["Data_Declaracao"], linha["Data_Vencimento"])
+        por_declaracao.setdefault(chave, {"cenarios": [], "Preco_Realizado": None,
+                                           "Ajustado": linha.get("Ajustado", 0)})
+        por_declaracao[chave]["cenarios"].append(linha)
+        por_declaracao[chave]["Preco_Realizado"] = linha["Preco_Realizado"]
+
+    completas = [d for d in por_declaracao.values() if len(d["cenarios"]) == 3]
+    ajustadas = [d for d in completas if d.get("Ajustado")]
+    nao_ajustadas = [d for d in completas if not d.get("Ajustado")]
+
+    if not completas:
+        st.info(
+            f"Nenhuma declaração de {ativo} chegou ao vencimento ainda. A aferição "
+            "aparece aqui conforme os cenários vencem — o fechamento é automático, "
+            "pelo passo diário de atualização."
+        )
+    else:
+        tabela_af = af.tabela_calibracao(ajustadas)
+        st.caption(af.resumir_afericao(tabela_af, len(ajustadas)))
+        if tabela_af:
+            st.dataframe(pd.DataFrame([{
+                "Região": l["regiao"],
+                "Você declarou": f"{l['prob_declarada']:.0%}",
+                "Ocorreu": f"{l['frequencia']:.0%}",
+                "Vezes": f"{l['ocorrencias']} de {l['n']}",
+            } for l in tabela_af]), use_container_width=True, hide_index=True)
+        if nao_ajustadas:
+            st.caption(
+                f"{len(nao_ajustadas)} declaração(ões) fora desta conta por não terem "
+                "sido ajustadas: reproduziam a distribuição implícita, então medi-las "
+                "mediria o preço, não você."
+            )
+        st.caption(
+            "Calibração não implica lucro: acertar a distribuição diz que sua "
+            "descrição do futuro foi honesta, não que havia vantagem a capturar."
+        )
