@@ -14,6 +14,8 @@ pede que voce escolha a companhia UMA VEZ, e grava o CNPJ.
 """
 import streamlit as st
 
+from componentes import estado_vazio, kpi_card
+
 
 def pagina_investidas():
     st.subheader("🏢 Empresas monitoradas")
@@ -80,7 +82,10 @@ def pagina_investidas():
 
     empresas = listar_empresas_interesse()
     if empresas.empty:
-        st.info("Nenhuma empresa monitorada ainda. Use a busca acima para adicionar.")
+        st.markdown(estado_vazio(
+            "Nenhuma empresa monitorada ainda",
+            "Use a busca acima para vincular uma companhia pelo CNPJ."),
+            unsafe_allow_html=True)
         return
 
     # ---------------- Comunicados ----------------
@@ -90,18 +95,18 @@ def pagina_investidas():
     cnpj = str(linha_empresa.get("cnpj") or "")
 
     if not "".join(c for c in cnpj if c.isdigit()):
-        st.info(
-            f"**{escolhida}** ainda não tem CNPJ vinculado, então não há comunicados. "
-            "Adicione-a novamente pela busca acima para criar o vínculo."
-        )
+        st.markdown(estado_vazio(
+            f"{escolhida} não tem CNPJ vinculado",
+            "Sem CNPJ não dá para casar com a CVM sem risco de trazer a empresa "
+            "errada. Adicione-a novamente pela busca acima para criar o vínculo."),
+            unsafe_allow_html=True)
     else:
         comunicados = ler_comunicados(cnpj=cnpj)
         if comunicados.empty:
-            st.info(
-                f"Nenhum comunicado de **{escolhida}** coletado ainda. "
-                "Rode `python coleta_cvm.py` — a coleta também roda sozinha "
-                "no `atualizar.py`."
-            )
+            st.markdown(estado_vazio(
+                f"Nenhum comunicado de {escolhida} coletado ainda",
+                "Rode <code>python coleta_cvm.py</code> — a coleta também roda "
+                "sozinha no <code>atualizar.py</code>."), unsafe_allow_html=True)
         else:
             categorias = sorted(
                 {str(c) for c in comunicados["categoria"].dropna() if str(c).strip()}
@@ -110,7 +115,9 @@ def pagina_investidas():
             exibir = comunicados if filtro == "(todas)" else comunicados[
                 comunicados["categoria"].astype(str) == filtro]
 
-            st.caption(f"{len(exibir)} de {len(comunicados)} comunicado(s).")
+            k1, k2 = st.columns(2)
+            k1.markdown(kpi_card("Comunicados", str(len(comunicados))), unsafe_allow_html=True)
+            k2.markdown(kpi_card("No filtro", str(len(exibir))), unsafe_allow_html=True)
             for _, c in exibir.head(60).iterrows():
                 assunto = str(c.get("fato_relevante") or "").strip()
                 if not assunto or assunto.lower() == "nan":

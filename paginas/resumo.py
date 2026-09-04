@@ -12,13 +12,20 @@ exposicao.py continua no repositorio para quando a carteira voltar a ser usada.
 Os "drivers" aqui sao FATOS, nao previsoes: um fato relevante da CVM e' algo
 que pode mexer com o papel, esta' datado e tem link. Nao ha' tentativa de
 estimar impacto - essa distincao e' deliberada.
+
+Visual: usa kpi_card e estado_vazio do tema (mesma familia da pagina Macro).
+Esta pagina era a mais visivel e a que mais ignorava o sistema de design.
 """
 import pandas as pd
 import streamlit as st
 
+from componentes import estado_vazio, kpi_card
 from dados_app import (calcular_delta_indicador, carregar_dolar,
                        carregar_indicadores, carregar_noticias, ultimo_valor)
 from db import engine
+
+SETA_CIMA = "▲"
+SETA_BAIXO = "▼"
 
 
 def _texto_com_data(tabela: str):
@@ -36,18 +43,40 @@ def _texto_com_data(tabela: str):
     return linha.get("texto"), (linha.get("gerado_em") if "gerado_em" in df.columns else None)
 
 
-def _linha_indicador(ind, nome, label, casas=2, sufixo="%"):
-    """Uma linha de 'o que se moveu', ou None se nao houver leitura."""
+def _kpi_indicador(ind, nome, label, casas=2, sufixo="%"):
+    """Card de KPI de 'o que se moveu', ou None se nao houver leitura.
+
+    Sentido "neutro" de proposito: variacao de indicador macro nao tem leitura
+    de bom/ruim universal - juro subindo e' bom pra aplicador e ruim pra
+    tomador. Mesma decisao ja tomada na pagina Macro (avaliar=False)."""
     try:
         valor = ultimo_valor(ind, nome)
     except Exception:
         return None
     if valor is None:
         return None
+    valor_texto = f"{valor:.{casas}f}{sufixo}"
     delta = calcular_delta_indicador(ind, nome)
-    seta = "" if delta in (None, 0) else ("▲" if delta > 0 else "▼")
-    variacao = "" if delta in (None, 0) else f" {seta} {delta:+.{casas}f} p.p."
-    return f"**{label}** {valor:.{casas}f}{sufixo}{variacao}"
+    if delta in (None, 0):
+        return kpi_card(label, valor_texto)
+    seta = SETA_CIMA if delta > 0 else SETA_BAIXO
+    return kpi_card(label, valor_texto, f"{seta} {delta:+.{casas}f} p.p.", "neutro")
+
+
+def _kpi_dolar(dolar):
+    """Card do USD/BRL com a variacao contra o pregao anterior."""
+    if dolar.empty or "close" not in dolar:
+        return None
+    serie = dolar.sort_values("date")
+    atual = float(serie["close"].iloc[-1])
+    delta_texto = None
+    if len(serie) > 1:
+        anterior = float(serie["close"].iloc[-2])
+        if anterior:
+            variacao = (atual - anterior) / anterior * 100
+            seta = SETA_CIMA if variacao > 0 else (SETA_BAIXO if variacao < 0 else "•")
+            delta_texto = f"{seta} {variacao:+.2f}%"
+    return kpi_card("USD/BRL", f"R$ {atual:.2f}", delta_texto, "neutro")
 
 
 def pagina_resumo():
@@ -58,29 +87,22 @@ def pagina_resumo():
     dolar = carregar_dolar()
 
     st.markdown("**📊 O que se moveu**")
-    linhas = [
-        _linha_indicador(ind, "Selic", "Selic", 2),
-        _linha_indicador(ind, "CDI", "CDI", 4),
-        _linha_indicador(ind, "IPCA", "IPCA (mês)", 2),
-        _linha_indicador(ind, "IGP-M", "IGP-M (mês)", 2),
+    cards = [
+        _kpi_indicador(ind, "Selic", "Selic", 2),
+        _kpi_indicador(ind, "CDI", "CDI", 4),
+        _kpi_indicador(ind, "IPCA", "IPCA (mês)", 2),
+        _kpi_indicador(ind, "IGP-M", "IGP-M (mês)", 2),
+        _kpi_dolar(dolar),
     ]
-    if not dolar.empty and "close" in dolar:
-        serie = dolar.sort_values("date")
-        atual = float(serie["close"].iloc[-1])
-        texto_dolar = f"**USD/BRL** R$ {atual:.2f}"
-        if len(serie) > 1:
-            anterior = float(serie["close"].iloc[-2])
-            if anterior:
-                variacao = (atual - anterior) / anterior * 100
-                seta = "▲" if variacao > 0 else ("▼" if variacao < 0 else "")
-                texto_dolar += f" {seta} {variacao:+.2f}%"
-        linhas.append(texto_dolar)
-
-    presentes = [linha for linha in linhas if linha]
+    presentes = [card for card in cards if card]
     if presentes:
-        st.markdown(" · ".join(presentes))
+        for coluna, card in zip(st.columns(len(presentes)), presentes):
+            coluna.markdown(card, unsafe_allow_html=True)
     else:
-        st.info("Sem indicadores coletados. Rode `python atualizar.py`.")
+        st.markdown(estado_vazio(
+            "Sem indicadores coletados",
+            "Rode <code>python atualizar.py</code> para trazer Selic, CDI, IPCA, "
+            "IGP-M e dólar."), unsafe_allow_html=True)
 
     # ---------------- Drivers: comunicados das monitoradas ----------------
     st.markdown("**🏢 Comunicados recentes das empresas monitoradas**")
@@ -95,10 +117,10 @@ def pagina_resumo():
         comunicados = pd.DataFrame()
 
     if comunicados.empty:
-        st.caption(
-            "Nenhum comunicado coletado ainda. Vincule as empresas pelo CNPJ em "
-            "*Empresas monitoradas* e rode `python coleta_cvm.py`."
-        )
+        st.markdown(estado_vazio(
+            "Nenhum comunicado coletado ainda",
+            "Vincule as empresas pelo CNPJ em <b>Empresas monitoradas</b> e rode "
+            "<code>python coleta_cvm.py</code>."), unsafe_allow_html=True)
     else:
         for _, c in comunicados.head(6).iterrows():
             assunto = str(c.get("fato_relevante") or "").strip()
@@ -117,7 +139,10 @@ def pagina_resumo():
     st.markdown("**📰 Manchetes de mercado**")
     noticias = carregar_noticias()
     if noticias.empty:
-        st.caption("Nenhuma notícia coletada.")
+        st.markdown(estado_vazio(
+            "Nenhuma notícia coletada",
+            "Rode <code>python coleta_noticias.py</code> — a coleta também roda "
+            "sozinha no <code>atualizar.py</code>."), unsafe_allow_html=True)
     else:
         for _, n in noticias.head(6).iterrows():
             st.markdown(f"[{n['titulo']}]({n['link']}) — _{n['data']}_")
@@ -144,4 +169,8 @@ def pagina_resumo():
             st.caption(f"Gerado em {data_destaques}.")
 
     if not briefing and not destaques:
-        st.caption("Sem briefing gerado. Rode `python briefing.py`.")
+        st.markdown(estado_vazio(
+            "Sem briefing gerado",
+            "Rode <code>python briefing.py</code>. Ele depende da API de IA — se a "
+            "cota estiver esgotada, o texto anterior é mantido em vez de sobrescrito."
+        ), unsafe_allow_html=True)

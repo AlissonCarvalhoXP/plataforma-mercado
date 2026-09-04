@@ -32,6 +32,22 @@ def badge_sinal(sinal):
     return f"{marcador} {sinal['texto']}"
 
 
+def estado_vazio(titulo, explicacao):
+    """Card de "ainda nao ha nada aqui", com o PROXIMO PASSO explicito.
+
+    Existe porque estado vazio e' o que o usuario ve primeiro numa pagina nova,
+    e era onde a inconsistencia mais aparecia: cada pagina resolvia com um
+    st.info de formato proprio. Alem do visual, o contrato aqui e' que a
+    explicacao diga o que FAZER - tela vazia sem proximo passo nao informa,
+    so' frustra."""
+    return (
+        f'<div class="estado-vazio">'
+        f'<div class="estado-vazio-titulo">{titulo}</div>'
+        f'<div class="estado-vazio-texto">{explicacao}</div>'
+        f'</div>'
+    )
+
+
 _CLASSES_OPORTUNIDADE_VALIDAS = {"compra", "venda"}
 
 
@@ -90,5 +106,12 @@ if __name__ == "__main__":
     html_neutro = card_oportunidade("X", "y", "tipo-desconhecido")
     assert 'class="oportunidade-card neutra"' in html_neutro
     print("[OK] Caso 10: tipo invalido cai em neutra.")
+
+    html_vazio = estado_vazio("Nenhum comunicado ainda",
+                              "Vincule a empresa pelo CNPJ e rode a coleta.")
+    assert 'class="estado-vazio"' in html_vazio
+    assert "Nenhum comunicado ainda" in html_vazio
+    assert "Vincule a empresa" in html_vazio
+    print("[OK] Caso 11: estado_vazio monta titulo e explicacao.")
 
     print("\nTodos os casos passaram.")

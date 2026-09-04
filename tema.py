@@ -150,6 +150,24 @@ CSS = f"""
         padding: 0.85rem 1rem;
         margin-bottom: 0.5rem;
     }}
+    .estado-vazio {{
+        background: var(--surface);
+        border: 1px dashed var(--line);
+        border-radius: 8px;
+        padding: 1.1rem 1.2rem;
+        margin: 0.4rem 0 0.8rem 0;
+        text-align: left;
+    }}
+    .estado-vazio-titulo {{
+        font-size: 0.9rem;
+        color: var(--text);
+        margin-bottom: 0.3rem;
+    }}
+    .estado-vazio-texto {{
+        font-size: 0.82rem;
+        color: var(--muted);
+        line-height: 1.5;
+    }}
     .oportunidade-card.compra {{ border-left-color: var(--signal-pos); }}
     .oportunidade-card.venda {{ border-left-color: var(--accent); }}
     .oportunidade-titulo {{
@@ -212,6 +230,7 @@ if __name__ == "__main__":
     print("[OK] Caso 3: CSS referencia os tokens de cor e as 3 fontes da identidade.")
 
     assert ".oportunidade-card" in CSS and ".oportunidade-card.compra" in CSS and ".oportunidade-card.venda" in CSS
+    assert ".estado-vazio" in CSS and ".estado-vazio-titulo" in CSS
     print("[OK] Caso 4: CSS define as classes do card de oportunidade (compra/venda).")
 
     print("\nTodos os casos passaram.")

@@ -24,6 +24,7 @@ def render_pagina_historico(db_path: str | None = None):
     import streamlit as st
     import pandas as pd
     import db_opcoes
+    from componentes import estado_vazio, kpi_card
     import afericao_cenarios as af
 
     st.subheader("📒 Histórico de Opções")
@@ -51,7 +52,10 @@ def render_pagina_historico(db_path: str | None = None):
     st.caption("Mede sua **previsão**: o que você achava, quando achou, e o que ocorreu.")
 
     if not declaracoes:
-        st.info("Nenhum cenário declarado ainda. Declare na aba Opções.")
+        st.markdown(estado_vazio(
+            "Nenhum cenário declarado ainda",
+            "Declare um cenário na aba <b>Opções</b>. Ele fica registrado com a "
+            "data, que é o que permite aferir depois."), unsafe_allow_html=True)
     else:
         st.dataframe(pd.DataFrame([{
             "Ativo": d["Ativo"],
@@ -83,12 +87,11 @@ def render_pagina_historico(db_path: str | None = None):
     )
 
     if not operacoes:
-        st.info(
-            "Nenhuma operação registrada ainda. Use o botão **Registrar** na tabela "
-            "de estruturas, na aba Opções. Sem marcação não há o que medir — e uma "
-            "tabela vazia aqui significa que nada foi registrado, **não** que nada "
-            "deu certo."
-        )
+        st.markdown(estado_vazio(
+            "Nenhuma operação registrada ainda",
+            "Use o botão <b>Registrar</b> na tabela de estruturas, na aba Opções. "
+            "Sem marcação não há o que medir — tabela vazia aqui significa que nada "
+            "foi <b>registrado</b>, não que nada deu certo."), unsafe_allow_html=True)
         return
 
     executadas = [o for o in operacoes if o.get("Preco_Executado") is not None]

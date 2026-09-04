@@ -12,6 +12,7 @@ um criterio de relevancia, que e' facil de inventar e dificil de sustentar.
 """
 import streamlit as st
 
+from componentes import estado_vazio, kpi_card
 from dados_app import carregar_carteira, carregar_noticias
 
 
@@ -42,7 +43,11 @@ def pagina_noticias():
 
     noticias = carregar_noticias()
     if noticias.empty:
-        st.info("Nenhuma notícia disponível no momento.")
+        st.markdown(estado_vazio(
+            "Nenhuma notícia coletada",
+            "Rode <code>python coleta_noticias.py</code>. A coleta traz as "
+            "editorias de mercado dos veículos, não o feed geral."),
+            unsafe_allow_html=True)
         return
 
     from investidas import categorias_disponiveis, filtrar_noticias
@@ -78,17 +83,17 @@ def pagina_noticias():
     filtradas = filtrar_noticias(noticias, termos=termos, categoria=categoria)
 
     total, restantes = len(noticias), len(filtradas)
-    if termos or categoria:
-        st.caption(f"{restantes} de {total} notícias correspondem ao filtro.")
-        if restantes == 0:
-            st.info(
-                "Nenhuma notícia bate com esse filtro. A busca é por menção "
-                "literal no título — tente um termo mais curto, ou o nome como "
-                "aparece na manchete."
-            )
-            return
-    else:
-        st.caption(f"{total} notícias coletadas. Use os filtros acima para restringir.")
+    c1, c2 = st.columns(2)
+    c1.markdown(kpi_card("Coletadas", str(total)), unsafe_allow_html=True)
+    c2.markdown(kpi_card("No filtro", str(restantes)), unsafe_allow_html=True)
+    if (termos or categoria) and restantes == 0:
+        st.markdown(estado_vazio(
+            "Nenhuma notícia bate com esse filtro",
+            "A busca é por menção literal no título. Tente um termo mais curto, "
+            "ou o nome como ele aparece na manchete."), unsafe_allow_html=True)
+        return
+    if not (termos or categoria):
+        st.caption("Use os filtros acima para restringir.")
 
     for _, n in filtradas.head(50).iterrows():
         categoria_txt = str(n.get("categoria") or "").strip()
